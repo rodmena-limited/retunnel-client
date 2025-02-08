@@ -1,12 +1,24 @@
 # genserver
 
+```
+______       ______          _____                          
+\ \ \ \     / ____/__  ____ / ___/___  ______   _____  _____
+ \ \ \ \   / / __/ _ \/ __ \\__ \/ _ \/ ___/ | / / _ \/ ___/
+ / / / /  / /_/ /  __/ / / /__/ /  __/ /   | |/ /  __/ /    
+/_/_/_/   \____/\___/_/ /_/____/\___/_/    |___/\___/_/     
+
+```
+
 **Python GenServer Implementation**
 
 [![PyPI Version](https://badge.fury.io/py/genserver.svg)](https://pypi.org/project/genserver/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Build Status](https://github.com/ourway/genserver/actions/workflows/ci.yml/badge.svg)](https://github.com/ourway/genserver/actions/workflows/ci.yml)
 [![Publish Status](https://github.com/ourway/genserver/actions/workflows/publish.yml/badge.svg)](https://github.com/ourway/genserver/actions/workflows/publish.yml)
-[![Code Coverage](https://codecov.io/gh/ourway/genserver/branch/main/graph/badge.svg?token=YOUR_CODECOV_TOKEN)](https://codecov.io/gh/ourway/genserver) `genserver` is a Python library that provides a robust and easy-to-use implementation of the GenServer pattern, inspired by Erlang/OTP. GenServers are a fundamental building block for building concurrent and fault-tolerant applications. They encapsulate state, handle asynchronous messages, and simplify concurrent programming.
+[![Code Coverage](https://codecov.io/gh/ourway/genserver/branch/main/graph/badge.svg?token=YOUR_CODECOV_TOKEN)](https://codecov.io/gh/ourway/genserver) 
+----
+
+`genserver` is a Python library that provides a robust and easy-to-use implementation of the GenServer pattern, inspired by Erlang/OTP. GenServers are a fundamental building block for building concurrent and fault-tolerant applications. They encapsulate state, handle asynchronous messages, and simplify concurrent programming.
 
 This library aims to bring the power and elegance of the GenServer model to Python developers, enabling them to build more resilient and scalable applications.
 
