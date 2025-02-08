@@ -26,5 +26,5 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 html_theme = "alabaster"
 html_static_path = ["_static"]
 
-master_doc = "README"
+master_doc = "index"
 source_suffix = [".md"]
