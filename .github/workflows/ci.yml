@@ -37,17 +37,17 @@ jobs:
     - name: Lint with isort
       run: |
         . .venv/bin/activate
-        isort src tests
+        isort genserver tests
 
     - name: Format with black
       run: |
         . .venv/bin/activate
-        black src tests
+        black genserver tests
 
     - name: Type check with mypy
       run: |
         . .venv/bin/activate
-        mypy src
+        mypy genserver
 
     - name: Test with pytest
       env:
