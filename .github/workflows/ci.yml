@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: ['3.12']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m venv .venv
+        . .venv/bin/activate
+        pip install -r requirements-dev.txt
+
+    - name: Set up environment variables
+      run: echo "TEST_TOKEN=${{ secrets.TEST_TOKEN }}" >> $GITHUB_ENV
+
+    - name: Lint with isort
+      run: |
+        . .venv/bin/activate
+        isort src tests
+
+    - name: Format with black
+      run: |
+        . .venv/bin/activate
+        black src tests
+
+    - name: Type check with mypy
+      run: |
+        . .venv/bin/activate
+        mypy src
+
+    - name: Test with pytest
+      env:
+        TEST_TOKEN: ${{ secrets.TEST_TOKEN }}
+      run: |
+        . .venv/bin/activate
+        pytest

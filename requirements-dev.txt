@@ -1,0 +1,25 @@
+# Install pytest and plugins
+setuptools
+pytest
+pytest-xdist
+pytest-cov
+
+# Install flake8
+flake8[pyflakes]
+
+# Install mypy
+mypy
+types-requests
+
+# Install black
+black
+
+# Install isort
+isort
+
+# vim tools
+jedi
+pynvim
+
+# publish
+twine

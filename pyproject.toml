@@ -1,0 +1,25 @@
+# pytest
+[tool.pytest.ini_options]
+addopts = "-ra -q"
+testpaths = [
+    "tests"
+]
+python_files = [
+    "test_*.py"
+]
+pythonpath = "src"
+python_classes = [
+    "Test*"
+]
+python_functions = [
+    "test_*"
+]
+
+[tool.isort]
+profile = "black"
+
+[tool.black]
+line-length = 88
+
+[tool.env]
+PYTHONPATH = "."
