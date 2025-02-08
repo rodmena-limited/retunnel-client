@@ -7,6 +7,9 @@ pytest-cov
 # Install flake8
 flake8[pyflakes]
 
+# document
+sphinx
+
 # Install mypy
 mypy
 types-requests

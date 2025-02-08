@@ -46,7 +46,7 @@ pip install genserver
 **Note:** The PyPI package name is `genserver` to avoid namespace conflicts. When importing in Python, you will use `import genserver`.
 
 ## Usage
-`python test_application.py or
+`python test_application.py` or
 Here's a simple example demonstrating how to use `genserver` to create a counter server:
 
 ```python
