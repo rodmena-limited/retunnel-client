@@ -6,6 +6,7 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
+
 project = "genserver"
 copyright = "2025, Farshid Ashouri"
 author = "Farshid Ashouri"
@@ -26,4 +27,4 @@ html_theme = "alabaster"
 html_static_path = ["_static"]
 
 master_doc = "README"
-source_suffix = [".rst", ".md"]
+source_suffix = [".md"]
