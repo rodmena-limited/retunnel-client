@@ -4,8 +4,8 @@
 
 [![PyPI Version](https://badge.fury.io/py/genserver.svg)](https://pypi.org/project/genserver/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Build Status](https://github.com/yourusername/genserver/actions/workflows/test.yml/badge.svg)](https://github.com/yourusername/genserver/actions/workflows/test.yml)
-[![Code Coverage](https://codecov.io/gh/yourusername/genserver/branch/main/graph/badge.svg?token=YOUR_CODECOV_TOKEN)](https://codecov.io/gh/yourusername/genserver) `genserver` is a Python library that provides a robust and easy-to-use implementation of the GenServer pattern, inspired by Erlang/OTP. GenServers are a fundamental building block for building concurrent and fault-tolerant applications. They encapsulate state, handle asynchronous messages, and simplify concurrent programming.
+[![Build Status](https://github.com/ourway/genserver/actions/workflows/test.yml/badge.svg)](https://github.com/ourway/genserver/actions/workflows/test.yml)
+[![Code Coverage](https://codecov.io/gh/ourway/genserver/branch/main/graph/badge.svg?token=YOUR_CODECOV_TOKEN)](https://codecov.io/gh/ourway/genserver) `genserver` is a Python library that provides a robust and easy-to-use implementation of the GenServer pattern, inspired by Erlang/OTP. GenServers are a fundamental building block for building concurrent and fault-tolerant applications. They encapsulate state, handle asynchronous messages, and simplify concurrent programming.
 
 This library aims to bring the power and elegance of the GenServer model to Python developers, enabling them to build more resilient and scalable applications.
 
@@ -33,7 +33,7 @@ pip install genserver
 **Note:** The PyPI package name is `genserver` to avoid namespace conflicts. When importing in Python, you will use `import genserver`.
 
 ## Usage
-`python test_application.py` or
+`python test_application.py or
 Here's a simple example demonstrating how to use `genserver` to create a counter server:
 
 ```python
