@@ -48,7 +48,7 @@ jobs:
       env:
         TEST_TOKEN: ${{ secrets.TEST_TOKEN }}
       run: |
-        pytest --cov-branch --cov-report=xml
+        pytest --cov=genserver --cov-report=xml
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v5
