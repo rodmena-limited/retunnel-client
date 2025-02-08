@@ -9,7 +9,7 @@ MYPY = $(VENV)/bin/mypy
 PYTEST = $(VENV)/bin/pytest
 
 # Directories
-SRC_DIR = src
+SRC_DIR = genserver
 TESTS_DIR = tests
 
 # Default target

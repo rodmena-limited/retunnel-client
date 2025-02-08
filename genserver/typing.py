@@ -8,6 +8,6 @@ from typing import Any, Dict, TypeVar
 Message = Dict[str, Any]
 
 # StateType will be a generic type variable
-StateType = TypeVar('StateType')
+StateType = TypeVar("StateType")
 
-__all__ = ['Message', 'StateType'] # Ensure StateType is exported
+__all__ = ["Message", "StateType"]  # Ensure StateType is exported
