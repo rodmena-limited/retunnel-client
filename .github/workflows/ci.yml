@@ -54,7 +54,12 @@ jobs:
         TEST_TOKEN: ${{ secrets.TEST_TOKEN }}
       run: |
         . .venv/bin/activate
-        pytest
+        pytest --cov --junitxml=junit.xml
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v5
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
 
     - name: Upload test results to Codecov
       if: ${{ !cancelled() }}
