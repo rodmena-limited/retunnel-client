@@ -5,7 +5,7 @@
 
 **Placeholder package for ReTunnel - Securely expose local servers to the internet**
 
-ReTunnel is a free, open-source platform that allows developers to securely expose local servers to the internet through powerful tunneling capabilities. This Python package serves as a placeholder for the upcoming official ReTunnel client.
+ReTunnel is a free platform that allows developers to securely expose local servers to the internet through powerful tunneling capabilities. This Python package serves as a placeholder for the upcoming official ReTunnel client.
 
 ## Features (Placeholder)
 
