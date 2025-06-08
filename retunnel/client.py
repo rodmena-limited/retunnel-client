@@ -1,6 +1,7 @@
 """
 ReTunnel Client - Placeholder implementation for ReTunnel services.
 """
+from typing import Optional
 
 
 class ReTunnelClient:
@@ -11,7 +12,7 @@ class ReTunnelClient:
     with actual tunneling functionality in the future.
     """
     
-    def __init__(self, api_key: str = None):
+    def __init__(self, api_key: Optional[str] = None):
         """
         Initialize the ReTunnel client.
         
