@@ -3,7 +3,8 @@ Tests for the ReTunnel package.
 """
 
 import pytest
-from retunnel import ReTunnelClient, hello, __version__
+
+from retunnel import ReTunnelClient, __version__, hello
 
 
 def test_version():
@@ -24,7 +25,7 @@ def test_client_initialization():
     client = ReTunnelClient()
     assert client.api_key is None
     assert not client.connected
-    
+
     # With API key
     client_with_key = ReTunnelClient(api_key="test-key")
     assert client_with_key.api_key == "test-key"
@@ -35,11 +36,11 @@ def test_client_connect():
     """Test client connection."""
     client = ReTunnelClient()
     assert not client.connected
-    
+
     result = client.connect()
     assert result is True
     assert client.connected
-    
+
     client.close()
     assert not client.connected
 
@@ -47,20 +48,20 @@ def test_client_connect():
 def test_create_tunnel():
     """Test tunnel creation."""
     client = ReTunnelClient()
-    
+
     # Should raise error if not connected
     with pytest.raises(RuntimeError, match="Not connected"):
         client.create_tunnel()
-    
+
     # Connect and create tunnel
     client.connect()
     tunnel_url = client.create_tunnel(port=8080)
     assert "placeholder.retunnel.com:8080" in tunnel_url
-    
+
     # Test with different port
     tunnel_url_2 = client.create_tunnel(port=3000)
     assert "placeholder.retunnel.com:3000" in tunnel_url_2
-    
+
     client.close()
 
 
@@ -70,7 +71,7 @@ def test_context_manager():
         assert client.connected
         tunnel_url = client.create_tunnel(port=5000)
         assert "placeholder.retunnel.com:5000" in tunnel_url
-    
+
     # After exiting context, should be disconnected
     assert not client.connected
 
@@ -83,6 +84,6 @@ def test_context_manager_with_exception():
             raise ValueError("Test exception")
     except ValueError:
         pass
-    
+
     # Should still be disconnected after exception
     assert not client.connected
