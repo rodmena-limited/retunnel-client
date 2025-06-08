@@ -6,7 +6,9 @@ with open("VERSION", "r") as version_file:
 setup(
     name="retunnel",
     version=version,
-    packages=find_packages(include=["retunnel"]),  # Find packages under retunnel/
+    packages=find_packages(
+        include=["retunnel"]
+    ),  # Find packages under retunnel/
     install_requires=[],  # No dependencies for now
     description="ReTunnel - Securely expose local servers to the internet",
     long_description=open("README.md").read(),
@@ -15,7 +17,9 @@ setup(
     author="ReTunnel Team",
     author_email="retunnel-support@rodmena.co.uk",
     license="MIT",
-    license_files=("LICENSE",),  # Explicitly include the LICENSE file - KEEP THIS!
+    license_files=(
+        "LICENSE",
+    ),  # Explicitly include the LICENSE file - KEEP THIS!
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",

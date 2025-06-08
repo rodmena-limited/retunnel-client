@@ -10,6 +10,6 @@ __author__ = "ReTunnel Team"
 __email__ = "support@retunnel.com"
 __url__ = "https://retunnel.com"
 
-from .client import ReTunnelClient, hello
+from .client import start_client
 
-__all__ = ["ReTunnelClient", "hello", "__version__"]
+__all__ = ["start_client", "__version__"]
