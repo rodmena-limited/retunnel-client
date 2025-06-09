@@ -1,96 +1,226 @@
-# ReTunnel Python Client
+# ReTunnel Client
 
 [![PyPI Version](https://badge.fury.io/py/retunnel.svg)](https://pypi.org/project/retunnel/)
+[![Python Versions](https://img.shields.io/pypi/pyversions/retunnel.svg)](https://pypi.org/project/retunnel/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Placeholder package for ReTunnel - Securely expose local servers to the internet**
+ReTunnel is a secure tunnel service that allows you to expose local servers to the internet. This is the official Python client library and CLI.
 
-ReTunnel is a free platform that allows developers to securely expose local servers to the internet through powerful tunneling capabilities. This Python package serves as a placeholder for the upcoming official ReTunnel client.
+## Features
 
-## Features (Placeholder)
-
-This is currently a placeholder package. The full ReTunnel client will include:
-
-* Secure tunnel creation and management
-* Multiple protocol support (HTTP, HTTPS, TCP)
-* Custom domain configuration
-* Authentication and API key management
-* Automatic reconnection and failover
-* Webhook forwarding
-* Request inspection and replay
-
-For now, this package provides a simple hello-world implementation to reserve the package name on PyPI.
-
+- 🚀 **Easy to use** - Single command to expose your local server
+- 🔒 **Secure** - All connections are encrypted
+- 🌐 **HTTP/HTTPS and TCP** - Support for web and TCP services
+- 🔑 **Automatic registration** - No sign-up required for basic usage
+- ⚡ **High performance** - Built with asyncio for efficiency
+- 🎛️ **Professional CLI** - Rich terminal interface with Typer
 
 ## Installation
-
-You can install `retunnel` from PyPI using pip:
 
 ```bash
 pip install retunnel
 ```
 
-## Usage
+Requires Python 3.9 or higher.
 
-Here's a simple example demonstrating the placeholder functionality:
+## Quick Start
+
+### HTTP Tunnel
+
+Expose a local web server on port 8080:
+
+```bash
+retunnel http 8080
+```
+
+### TCP Tunnel
+
+Expose a local TCP service on port 22:
+
+```bash
+retunnel tcp 22
+```
+
+### With Custom Subdomain
+
+Request a specific subdomain (subject to availability):
+
+```bash
+retunnel http 8080 --subdomain myapp
+```
+
+### With Authentication
+
+Protect your tunnel with HTTP Basic Auth:
+
+```bash
+retunnel http 8080 --auth user:password
+```
+
+## Configuration
+
+### Server Endpoint
+
+By default, ReTunnel connects to `localhost:6400`. You can configure this using:
+
+- Environment variable: `RETUNNEL_SERVER_ENDPOINT=your.server.com:port`
+- Command-line option: `--server your.server.com:port`
+- Configuration file: `server_addr: your.server.com:port`
+
+### Save Authentication Token
+
+Save your auth token for persistent access:
+
+```bash
+retunnel authtoken YOUR_AUTH_TOKEN
+```
+
+### Configuration File
+
+Create a `retunnel.yml` file to define multiple tunnels:
+
+```yaml
+server_addr: ${RETUNNEL_SERVER_ENDPOINT:localhost:6400}
+auth_token: ${RETUNNEL_AUTH_TOKEN}
+log_level: INFO
+
+tunnels:
+  - name: web
+    protocol: http
+    local_port: 8080
+    subdomain: myapp
+    
+  - name: api
+    protocol: http
+    local_port: 3000
+    auth: user:pass
+    
+  - name: ssh
+    protocol: tcp
+    local_port: 22
+```
+
+Then start all tunnels:
+
+```bash
+retunnel start retunnel.yml
+```
+
+## Environment Variables
+
+- `RETUNNEL_SERVER_ENDPOINT` - Server endpoint (default: `localhost:6400`)
+- `RETUNNEL_AUTH_TOKEN` - Authentication token
+- `RETUNNEL_LOG_LEVEL` - Logging level (DEBUG, INFO, WARNING, ERROR)
+
+## Python API
 
 ```python
-from retunnel import ReTunnelClient, hello
+import asyncio
+from retunnel import ReTunnelClient, TunnelConfig
 
-# Simple hello message
-print(hello())
-
-# Create a client instance
-client = ReTunnelClient()
-
-# Connect to the service (placeholder)
-if client.connect():
-    print("Connected to ReTunnel service")
+async def main():
+    # Create client
+    client = ReTunnelClient()
     
-    # Create a tunnel (placeholder)
-    tunnel_url = client.create_tunnel(port=8080)
-    print(f"Tunnel created: {tunnel_url}")
+    # Connect to server
+    await client.connect()
     
-    # Close the connection
-    client.close()
+    # Create HTTP tunnel
+    config = TunnelConfig(protocol="http", local_port=8080)
+    tunnel = await client.request_tunnel(config)
+    
+    print(f"Tunnel URL: {tunnel.url}")
+    
+    # Keep running
+    await asyncio.Event().wait()
 
-# Or use context manager
-with ReTunnelClient(api_key="your-api-key") as client:
-    tunnel_url = client.create_tunnel(port=3000)
-    print(f"Tunnel URL: {tunnel_url}")
+asyncio.run(main())
 ```
 
-## Running Tests
+## Advanced Usage
 
-To run the unit tests, install pytest and run:
+### Custom Server
+
+Connect to a self-hosted ReTunnel server:
 
 ```bash
-pip install pytest
+retunnel http 8080 --server your-server.com:8000
 ```
 
-To run the tests:
+### Multiple Tunnels
+
+Use the configuration file to manage multiple tunnels simultaneously.
+
+### Logging
+
+Set log level for debugging:
 
 ```bash
-pytest tests/
+retunnel http 8080 --log-level DEBUG
 ```
 
-## Documentation
+## CLI Commands
 
-Full documentation for ReTunnel is available at [https://retunnel.com](https://retunnel.com)
+- `retunnel http PORT` - Create HTTP tunnel
+- `retunnel tcp PORT` - Create TCP tunnel
+- `retunnel start CONFIG` - Start tunnels from config file
+- `retunnel authtoken TOKEN` - Save authentication token
+- `retunnel config` - Manage configuration
+- `retunnel version` - Show version
+- `retunnel credits` - Show open source credits
 
-## Contributing
+## Development
 
-This is a placeholder package. The actual ReTunnel client development is happening at the main ReTunnel repository.
+### Setup
+
+```bash
+# Clone repository
+git clone https://github.com/retunnel/retunnel-client
+cd retunnel-client
+
+# Install with development dependencies
+make install-dev
+```
+
+### Testing
+
+```bash
+# Run tests
+make test
+
+# Run linting
+make lint
+
+# Run type checking
+make typecheck
+
+# Format code
+make format
+```
+
+### Building
+
+```bash
+make build
+```
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see LICENSE file for details.
 
-## Links
+## Credits
 
-* Website: [https://retunnel.com](https://retunnel.com)
-* PyPI: [https://pypi.org/project/retunnel/](https://pypi.org/project/retunnel/)
+ReTunnel uses these excellent open source libraries:
 
----
+- aiohttp - Async HTTP client/server
+- websockets - WebSocket client/server
+- msgpack - Efficient serialization
+- typer - CLI framework
+- rich - Terminal formatting
+- pydantic - Data validation
 
-**Note:** This is a placeholder package. The full-featured ReTunnel client is under development.
+## Support
+
+- Documentation: https://docs.retunnel.com
+- Issues: https://github.com/retunnel/retunnel-client/issues
+- Email: support@retunnel.com

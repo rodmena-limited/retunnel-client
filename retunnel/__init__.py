@@ -1,15 +1,27 @@
-"""
-ReTunnel - A placeholder package for ReTunnel services.
+"""ReTunnel - Securely expose local servers to the internet."""
 
-ReTunnel is a platform for securely exposing local servers to the internet.
-This package serves as a placeholder for future ReTunnel client functionality.
-"""
-
-__version__ = "0.1.0"
+__version__ = "2.0.0"
 __author__ = "ReTunnel Team"
 __email__ = "support@retunnel.com"
 __url__ = "https://retunnel.com"
 
-from .client import start_client
+from .client.client import ReTunnelClient, Tunnel, TunnelConfig
+from .core.exceptions import (
+    AuthenticationError,
+    ConfigurationError,
+    ConnectionError,
+    ReTunnelError,
+    TunnelError,
+)
 
-__all__ = ["start_client", "__version__"]
+__all__ = [
+    "ReTunnelClient",
+    "Tunnel",
+    "TunnelConfig",
+    "ReTunnelError",
+    "ConnectionError",
+    "AuthenticationError",
+    "TunnelError",
+    "ConfigurationError",
+    "__version__",
+]
