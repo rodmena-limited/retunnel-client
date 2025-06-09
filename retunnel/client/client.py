@@ -69,7 +69,9 @@ class ReTunnelClient:
     ):
         # Use server address from environment or default to localhost:6400
         if server_addr is None:
-            server_addr = os.environ.get("RETUNNEL_SERVER_ENDPOINT", "localhost:6400")
+            server_addr = os.environ.get(
+                "RETUNNEL_SERVER_ENDPOINT", "localhost:6400"
+            )
         self.server_addr = self._normalize_server_addr(server_addr)
         self.auth_token = auth_token
         self.auto_register = auto_register

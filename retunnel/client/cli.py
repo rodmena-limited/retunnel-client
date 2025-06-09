@@ -16,7 +16,7 @@ from rich.table import Table
 
 from .. import __version__
 from ..core.config import AuthConfig, ClientConfig
-from .client import ReTunnelClient, TunnelConfig
+from .high_performance_model import HighPerformanceClient, TunnelConfig
 
 app = typer.Typer(
     name="retunnel",
@@ -222,8 +222,8 @@ async def _run_tunnel(
     token: Optional[str] = None,
 ) -> None:
     """Run a single tunnel."""
-    # Create client (server defaults to RETUNNEL_SERVER_ENDPOINT or 127.0.0.1:6400)
-    client = ReTunnelClient(server, auth_token=token)
+    # Create client (server defaults to RETUNNEL_SERVER_ENDPOINT or localhost:6400)
+    client = HighPerformanceClient(server, auth_token=token)
 
     try:
         # Connect
@@ -247,7 +247,7 @@ async def _run_tunnel(
             f"[bold green]{tunnel.url}[/bold green]\n\n"
             f"[dim]Tunnel ID: {tunnel.id}[/dim]\n"
             f"[dim]Protocol: {tunnel.protocol}[/dim]\n"
-            f"[dim]Local Port: {tunnel.local_port}[/dim]",
+            f"[dim]Local Port: {tunnel.config.local_port}[/dim]",
             title="🚀 Tunnel Active",
             border_style="green",
         )
@@ -271,7 +271,7 @@ async def _run_tunnel(
 async def _run_from_config(config: ClientConfig) -> None:
     """Run tunnels from configuration."""
     # Create client
-    client = ReTunnelClient(
+    client = HighPerformanceClient(
         config.server_addr,
         auth_token=config.auth_token,
     )
@@ -313,7 +313,7 @@ async def _run_from_config(config: ClientConfig) -> None:
         table.add_column("Local Port", style="yellow")
 
         for name, tunnel in tunnels:
-            table.add_row(name, tunnel.url, str(tunnel.local_port))
+            table.add_row(name, tunnel.url, str(tunnel.config.local_port))
 
         console.print("\n")
         console.print(table)

@@ -26,9 +26,14 @@ class APIClient:
     def __init__(self, base_url: Optional[str] = None):
         if base_url is None:
             # Use server endpoint from environment or default to localhost:6400
-            server_endpoint = os.environ.get("RETUNNEL_SERVER_ENDPOINT", "localhost:6400")
+            server_endpoint = os.environ.get(
+                "RETUNNEL_SERVER_ENDPOINT", "localhost:6400"
+            )
             # Convert to HTTP URL
-            if "localhost" in server_endpoint or "127.0.0.1" in server_endpoint:
+            if (
+                "localhost" in server_endpoint
+                or "127.0.0.1" in server_endpoint
+            ):
                 base_url = f"http://{server_endpoint}"
             else:
                 base_url = f"https://{server_endpoint}"
@@ -82,11 +87,13 @@ class APIClient:
         """Register a new anonymous user."""
         import random
         import string
-        
+
         # Generate random anonymous email
-        random_id = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+        random_id = "".join(
+            random.choices(string.ascii_lowercase + string.digits, k=8)
+        )
         anon_email = f"anon_{random_id}@retunnel.io"
-        
+
         data = await self._request(
             "POST",
             "/api/v1/auth/register",
@@ -95,7 +102,9 @@ class APIClient:
 
         return UserInfo(
             user_id=data["id"],
-            username=data.get("email", anon_email).split("@")[0],  # Use email prefix as username
+            username=data.get("email", anon_email).split("@")[
+                0
+            ],  # Use email prefix as username
             email=data.get("email"),
             auth_token=data["auth_token"],
         )

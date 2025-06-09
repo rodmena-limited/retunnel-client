@@ -134,7 +134,7 @@ MESSAGE_TYPES: Dict[str, Type[Message]] = {
 def decode_message(data: bytes) -> Message:
     """Decode a message from bytes."""
     msg_dict = msgpack.unpackb(data, raw=False, strict_map_key=False)
-    
+
     # Server sends messages in PascalCase format
     # Convert PascalCase fields to snake_case
     converted_dict = {}
@@ -161,7 +161,7 @@ def decode_message(data: bytes) -> Message:
         else:
             # Keep as-is for unknown fields
             converted_dict[key.lower()] = value
-    
+
     # Get message type
     msg_type = converted_dict.get("type")
     if not msg_type or msg_type not in MESSAGE_TYPES:
@@ -170,5 +170,5 @@ def decode_message(data: bytes) -> Message:
     message_class = MESSAGE_TYPES[msg_type]
     # Map "type" to "msg_type" for our model
     converted_dict["msg_type"] = converted_dict.get("type", "")
-    
+
     return message_class(**converted_dict)

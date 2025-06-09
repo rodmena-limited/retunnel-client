@@ -102,10 +102,10 @@ class ClientConfig(BaseSettings):
         """Save configuration to file."""
         if path is None:
             path = self.get_default_config_file()
-        
+
         # Ensure parent directory exists
         path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Save as JSON
         with open(path, "w") as f:
             json.dump(self.model_dump(exclude_none=True), f, indent=2)
@@ -115,14 +115,14 @@ class ClientConfig(BaseSettings):
         """Load configuration from file."""
         if path is None:
             path = cls().get_default_config_file()
-        
+
         if not path.exists():
             # Return defaults if file doesn't exist
             return cls()
-        
+
         with open(path, "r") as f:
             data = json.load(f)
-        
+
         return cls(**data)
 
     def get_default_config_file(self) -> Path:

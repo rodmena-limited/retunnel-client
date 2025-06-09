@@ -5,7 +5,13 @@ __author__ = "ReTunnel Team"
 __email__ = "support@retunnel.com"
 __url__ = "https://retunnel.com"
 
-from .client.client import ReTunnelClient, Tunnel, TunnelConfig
+from .client.high_performance_model import (
+    HighPerformanceClient,
+    Tunnel,
+    TunnelConfig,
+)
+
+ReTunnelClient = HighPerformanceClient  # Alias for backward compatibility
 from .core.exceptions import (
     AuthenticationError,
     ConfigurationError,
