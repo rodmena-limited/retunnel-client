@@ -47,6 +47,7 @@ class Tunnel:
     protocol: str
     config: TunnelConfig
     tunnel_id: str = ""
+    subdomain: Optional[str] = None
     created_at: float = field(default_factory=time.time)
     bytes_in: int = 0
     bytes_out: int = 0
@@ -88,6 +89,12 @@ class HighPerformanceClient:
         # State
         self.tunnels: Dict[str, Tunnel] = {}
         self.pending_requests: Dict[str, asyncio.Future[Any]] = {}
+        self.is_connected = False
+        self.connection_status = "Disconnected"
+        self._reconnect_delay = 1.0  # Start with 1 second
+        self._max_reconnect_delay = 16.0
+        self._reconnecting = False
+        self._running = True
 
         # Configuration
         self.version = "2.3.40"
@@ -97,6 +104,7 @@ class HighPerformanceClient:
         self._heartbeat_task: Optional[asyncio.Task[Any]] = None
         self._control_loop_task: Optional[asyncio.Task[Any]] = None
         self._proxy_pool_task: Optional[asyncio.Task[Any]] = None
+        self._reconnect_task: Optional[asyncio.Task[Any]] = None
 
         self.logger = logging.getLogger(f"client.{self.client_id}")
 
@@ -261,6 +269,11 @@ class HighPerformanceClient:
             self.client_id = resp["ClientId"]
 
         self.logger.info(f"Connected as client {self.client_id}")
+        
+        # Update connection state
+        self.is_connected = True
+        self.connection_status = "Connected"
+        self._reconnect_delay = 1.0  # Reset reconnect delay on successful connection
 
         # Start background tasks
         self._start_background_tasks()
@@ -324,6 +337,7 @@ class HighPerformanceClient:
                 protocol=resp.get("Protocol", config.protocol),
                 config=config,
                 tunnel_id=tunnel_id,
+                subdomain=subdomain,  # Store subdomain for reconnection
             )
 
             self.tunnels[tunnel.id] = tunnel
@@ -697,15 +711,29 @@ class HighPerformanceClient:
     async def _control_loop(self) -> None:
         """Listen for control messages"""
         try:
-            while self.control_ws and not self.control_ws.closed:
-                msg = await self._receive_message(self.control_ws)
-                await self._handle_message(msg)
+            while self._running and self.control_ws and not self.control_ws.closed:
+                try:
+                    msg = await self._receive_message(self.control_ws)
+                    await self._handle_message(msg)
+                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                    # Connection lost
+                    self.logger.warning(f"Connection lost: {e}")
+                    self.is_connected = False
+                    self.connection_status = "Disconnected"
+                    # Trigger reconnection
+                    if self._running and not self._reconnecting:
+                        self._reconnect_task = asyncio.create_task(self._reconnect())
+                    break
         except asyncio.CancelledError:
             # Normal shutdown
             pass
         except Exception as e:
-            if self.control_ws and not self.control_ws.closed:
-                self.logger.error(f"Control loop error: {e}")
+            self.logger.error(f"Control loop error: {e}")
+            self.is_connected = False
+            self.connection_status = "Error"
+            # Trigger reconnection
+            if self._running and not self._reconnecting:
+                self._reconnect_task = asyncio.create_task(self._reconnect())
 
     async def _maintain_proxy_pool(self) -> None:
         """Maintain a pool of proxy connections"""
@@ -713,9 +741,68 @@ class HighPerformanceClient:
         # This could be optimized to pre-create connections
         pass
 
+    async def _reconnect(self) -> None:
+        """Reconnect with exponential backoff"""
+        self._reconnecting = True
+        
+        while self._running:
+            try:
+                self.connection_status = f"Reconnecting in {self._reconnect_delay:.0f}s..."
+                self.logger.info(f"Attempting reconnection in {self._reconnect_delay} seconds")
+                
+                # Wait with exponential backoff
+                await asyncio.sleep(self._reconnect_delay)
+                
+                # Update status
+                self.connection_status = "Connecting..."
+                
+                # Close existing connection if any
+                if self.control_ws and not self.control_ws.closed:
+                    await self.control_ws.close()
+                
+                # Close and recreate session
+                if self.session and not self.session.closed:
+                    await self.session.close()
+                    await asyncio.sleep(0.1)
+                
+                # Re-establish connection
+                await self.connect()
+                
+                # Re-request tunnels with same configs
+                for tunnel in list(self.tunnels.values()):
+                    try:
+                        # Request tunnel with same subdomain
+                        config = tunnel.config
+                        # For HTTP tunnels, try to get the same subdomain
+                        if tunnel.protocol == "http" and hasattr(tunnel, "subdomain"):
+                            config.subdomain = tunnel.subdomain
+                        
+                        new_tunnel = await self.request_tunnel(config)
+                        self.logger.info(f"Re-established tunnel: {new_tunnel.url}")
+                    except Exception as e:
+                        self.logger.error(f"Failed to re-establish tunnel: {e}")
+                
+                # Success - exit reconnection loop
+                self._reconnecting = False
+                break
+                
+            except Exception as e:
+                self.logger.error(f"Reconnection failed: {e}")
+                self.connection_status = f"Reconnection failed, retrying..."
+                
+                # Increase delay with exponential backoff
+                self._reconnect_delay = min(self._reconnect_delay * 2, self._max_reconnect_delay)
+        
+        self._reconnecting = False
+
     async def close(self) -> None:
         """Close all connections and clean up"""
         self.logger.info("Closing client")
+        
+        # Stop running
+        self._running = False
+        self.is_connected = False
+        self.connection_status = "Disconnected"
 
         # Cancel background tasks
         tasks_to_cancel = []
@@ -723,6 +810,7 @@ class HighPerformanceClient:
             self._heartbeat_task,
             self._control_loop_task,
             self._proxy_pool_task,
+            self._reconnect_task,
         ]:
             if task and not task.done():
                 task.cancel()

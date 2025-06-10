@@ -507,10 +507,9 @@ async def _run_tunnel(
         )
         tunnel_table.add_row("Protocol", tunnel.protocol.upper())
         tunnel_table.add_row("Local Port", str(tunnel.config.local_port))
-        tunnel_table.add_row(
-            "Status",
-            f"[{RETUNNEL_THEME['success']}]● Active[/{RETUNNEL_THEME['success']}]",
-        )
+        # Initial status
+        status_text = f"[{RETUNNEL_THEME['success']}]● Active[/{RETUNNEL_THEME['success']}]"
+        tunnel_table.add_row("Status", status_text)
 
         tunnel_panel = Panel(
             tunnel_table,
@@ -557,6 +556,37 @@ async def _run_tunnel(
                 layout, console=console, refresh_per_second=2, transient=False
             ) as live:
                 while True:
+                    # Update connection status
+                    if client.is_connected:
+                        status_text = f"[{RETUNNEL_THEME['success']}]● Active[/{RETUNNEL_THEME['success']}]"
+                    elif client._reconnecting:
+                        status_text = f"[{RETUNNEL_THEME['warning']}]⟳ {client.connection_status}[/{RETUNNEL_THEME['warning']}]"
+                    else:
+                        status_text = f"[{RETUNNEL_THEME['error']}]● {client.connection_status}[/{RETUNNEL_THEME['error']}]"
+                    
+                    # Rebuild tunnel table with updated status
+                    tunnel_table = Table(show_header=False, box=None, padding=(0, 2))
+                    tunnel_table.add_column(style=f"{RETUNNEL_THEME['dim']}")
+                    tunnel_table.add_column(style="bold")
+                    
+                    tunnel_table.add_row(
+                        "URL",
+                        f"[bold {RETUNNEL_THEME['success']}]{tunnel.url}[/bold {RETUNNEL_THEME['success']}]",
+                    )
+                    tunnel_table.add_row("Protocol", tunnel.protocol.upper())
+                    tunnel_table.add_row("Local Port", str(tunnel.config.local_port))
+                    tunnel_table.add_row("Status", status_text)
+                    
+                    tunnel_panel = Panel(
+                        tunnel_table,
+                        title="[bold]Tunnel Details[/bold]",
+                        border_style=RETUNNEL_THEME["success"] if client.is_connected else RETUNNEL_THEME["warning"],
+                        padding=(1, 2),
+                    )
+                    
+                    layout["info"].update(tunnel_panel)
+                    
+                    # Update traffic stats
                     stats = tunnel.get_stats()
                     in_bytes = _format_bytes(stats["bytes_in"])
                     out_bytes = _format_bytes(stats["bytes_out"])
