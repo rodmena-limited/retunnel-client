@@ -219,7 +219,7 @@ class HighPerformanceClient:
             "Arch": platform.machine().lower(),
             "Version": self.version,
             "MmVersion": self.mm_version,
-            "User": self.auth_token or "",
+            "User": self.auth_token if self.auth_token else "",
             "Password": "",
         }
 

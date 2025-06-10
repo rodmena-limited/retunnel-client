@@ -33,7 +33,9 @@ class ReTunnelAPIClient:
 
     async def __aenter__(self) -> "ReTunnelAPIClient":
         """Async context manager entry"""
-        self._session = ClientSession()
+        # Add timeout for all requests (2 seconds)
+        timeout = aiohttp.ClientTimeout(total=2)
+        self._session = ClientSession(timeout=timeout)
         return self
 
     async def __aexit__(

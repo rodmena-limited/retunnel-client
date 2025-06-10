@@ -222,12 +222,18 @@ async def _run_tunnel(
     token: Optional[str] = None,
 ) -> None:
     """Run a single tunnel."""
+    # Suppress client logging to preserve Rich output
+    import logging as _logging
+    _logging.getLogger("client").setLevel(_logging.WARNING)
+    _logging.getLogger("retunnel").setLevel(_logging.WARNING)
+    
     # Create client (server defaults to RETUNNEL_SERVER_ENDPOINT or localhost:6400)
     client = HighPerformanceClient(server, auth_token=token)
 
     try:
         # Connect
-        console.print(f"[cyan]Connecting to {server}...[/cyan]")
+        display_server = server or "localhost:6400"
+        console.print(f"[cyan]Connecting to {display_server}...[/cyan]")
         await client.connect()
 
         console.print(
