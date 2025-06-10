@@ -271,9 +271,16 @@ class HighPerformanceClient:
                 raise Exception(f"Tunnel creation failed: {resp['Error']}")
 
             # Create tunnel object
+            # Transform URL from localhost:6400 to retunnel.net
+            url = resp.get("Url", "")
+            if url:
+                # Replace http://localhost:6400 or http://anyhost:6400 with https://retunnel.net
+                import re
+                url = re.sub(r'http://[^/]+/', 'https://retunnel.net/', url)
+            
             tunnel = Tunnel(
                 id=req_id,
-                url=resp.get("Url", ""),
+                url=url,
                 protocol=resp.get("Protocol", ""),
                 config=config,
                 tunnel_id=resp.get("TunnelId", ""),

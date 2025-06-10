@@ -3,6 +3,27 @@ server error:
 app-1       | 2025-06-09 22:41:28 - app.core.websocket_handler - ERROR - Message handling error: Unknown message format: {'type': 'websocket.disconnect', 'code': 1000}
 
 
+client errors: 
+
+Exception ignored in: <function ClientResponse.__del__ at 0x7b8000e3f430>
+Traceback (most recent call last):
+  File "/mnt/blockstorage/ngrok/rewrite/retunnel-client/.venv/lib/python3.9/site-packages/aiohttp/client_reqrep.py", line 443, in __del__
+    self._connection.release()
+  File "/mnt/blockstorage/ngrok/rewrite/retunnel-client/.venv/lib/python3.9/site-packages/aiohttp/connector.py", line 224, in release
+    self._connector._release(self._key, self._protocol)
+  File "/mnt/blockstorage/ngrok/rewrite/retunnel-client/.venv/lib/python3.9/site-packages/aiohttp/connector.py", line 785, in _release
+    protocol.close()
+  File "/mnt/blockstorage/ngrok/rewrite/retunnel-client/.venv/lib/python3.9/site-packages/aiohttp/client_proto.py", line 93, in close
+    transport.close()
+  File "/root/.local/share/uv/python/cpython-3.9.23-linux-x86_64-gnu/lib/python3.9/asyncio/selector_events.py", line 698, in close
+    self._loop.call_soon(self._call_connection_lost, None)
+  File "/root/.local/share/uv/python/cpython-3.9.23-linux-x86_64-gnu/lib/python3.9/asyncio/base_events.py", line 751, in call_soon
+    self._check_closed()
+  File "/root/.local/share/uv/python/cpython-3.9.23-linux-x86_64-gnu/lib/python3.9/asyncio/base_events.py", line 515, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+
+
 features:
 client should count bytes and report back to user
 enable msgpack

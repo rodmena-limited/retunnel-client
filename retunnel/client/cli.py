@@ -13,6 +13,8 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
 from rich.table import Table
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.rule import Rule
 
 from .. import __version__
 from ..core.config import AuthConfig, ClientConfig
@@ -20,8 +22,10 @@ from .high_performance_model import HighPerformanceClient, TunnelConfig
 
 app = typer.Typer(
     name="retunnel",
-    help="ReTunnel - Securely expose local servers to the internet",
+    help="ReTunnel - Enterprise-grade secure tunnel service for exposing local servers to the internet",
     add_completion=True,
+    rich_markup_mode="rich",
+    pretty_exceptions_show_locals=False,
 )
 console = Console()
 
@@ -32,7 +36,7 @@ def setup_logging(level: str = "INFO") -> None:
         level=level,
         format="%(message)s",
         datefmt="[%X]",
-        handlers=[RichHandler(console=console, rich_tracebacks=True)],
+        handlers=[RichHandler(console=console, rich_tracebacks=True, show_time=False, show_path=False)],
     )
 
 
@@ -188,21 +192,30 @@ def config(
 @app.command()
 def version() -> None:
     """Show ReTunnel version."""
-    console.print(f"ReTunnel v{__version__}")
+    console.print(f"\n[bold cyan]ReTunnel[/bold cyan] v{__version__}")
+    console.print("[dim]© 2024 ReTunnel Team[/dim]\n")
 
 
 @app.command()
 def credits() -> None:
     """Show open source credits."""
-    table = Table(title="Open Source Credits", show_header=True)
+    console.print("\n[bold cyan]Open Source Credits[/bold cyan]\n")
+    
+    table = Table(
+        show_header=True,
+        header_style="bold cyan",
+        border_style="dim",
+        show_edge=False,
+        pad_edge=False,
+        box=None
+    )
     table.add_column("Package", style="cyan")
     table.add_column("License", style="green")
-    table.add_column("Description", style="white")
+    table.add_column("Description")
 
     credits_data = [
         ("aiohttp", "Apache-2.0", "Async HTTP client/server"),
-        ("websockets", "BSD-3", "WebSocket client/server"),
-        ("msgpack", "Apache-2.0", "MessagePack serialization"),
+        ("msgpack", "Apache-2.0", "Binary serialization"),
         ("typer", "MIT", "CLI framework"),
         ("rich", "MIT", "Terminal formatting"),
         ("pydantic", "MIT", "Data validation"),
@@ -213,7 +226,7 @@ def credits() -> None:
         table.add_row(package, license, desc)
 
     console.print(table)
-    console.print("\n[dim]Thank you to all open source contributors![/dim]")
+    console.print("\n[dim italic]Thank you to all contributors[/dim italic]\n")
 
 
 async def _run_tunnel(
@@ -231,47 +244,67 @@ async def _run_tunnel(
     client = HighPerformanceClient(server, auth_token=token)
 
     try:
-        # Connect
-        display_server = server or "localhost:6400"
-        console.print(f"[cyan]Connecting to {display_server}...[/cyan]")
-        await client.connect()
-
-        console.print(
-            f"[green]✓[/green] Connected with client ID: {client.client_id}"
-        )
+        # Clean header
+        console.clear()
+        console.print()
+        console.print(f"[bold cyan]ReTunnel[/bold cyan] [dim]v{__version__}[/dim]")
+        console.print("[dim]Secure tunnel service[/dim]")
+        console.print()
+        
+        # Connection progress
+        with Progress(
+            SpinnerColumn(spinner_name="dots", style="cyan"),
+            TextColumn("[cyan]Establishing secure connection...[/cyan]"),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Connecting", total=None)
+            await client.connect()
+            progress.update(task, description="[green]✓[/green] Connected successfully")
+            await asyncio.sleep(0.3)
+        
+        console.print(f"[green]✓[/green] Connected to tunnel service")
+        console.print(f"[dim]Client ID: {client.client_id}[/dim]")
+        console.print()
 
         # Request tunnel
-        msg = (
-            f"[cyan]Requesting {config.protocol} tunnel on port "
-            f"{config.local_port}...[/cyan]"
-        )
-        console.print(msg)
-        tunnel = await client.request_tunnel(config)
+        with Progress(
+            SpinnerColumn(spinner_name="dots", style="cyan"),
+            TextColumn(f"[cyan]Creating {config.protocol.upper()} tunnel...[/cyan]"),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Creating", total=None)
+            tunnel = await client.request_tunnel(config)
+            progress.update(task, description="[green]✓[/green] Tunnel created")
+            await asyncio.sleep(0.3)
 
-        # Display tunnel info
-        panel = Panel(
-            f"[bold green]{tunnel.url}[/bold green]\n\n"
-            f"[dim]Tunnel ID: {tunnel.id}[/dim]\n"
-            f"[dim]Protocol: {tunnel.protocol}[/dim]\n"
-            f"[dim]Local Port: {tunnel.config.local_port}[/dim]",
-            title="🚀 Tunnel Active",
-            border_style="green",
-        )
-        console.print(panel)
-
-        console.print("\n[dim]Press Ctrl+C to stop the tunnel...[/dim]")
+        # Display tunnel info cleanly
+        console.print()
+        console.print(Rule(style="dim"))
+        console.print()
+        console.print(f"[bold green]{tunnel.url}[/bold green]")
+        console.print()
+        console.print(f"  [cyan]Protocol[/cyan]    {tunnel.protocol.upper()}")
+        console.print(f"  [cyan]Local port[/cyan]  {tunnel.config.local_port}")
+        console.print(f"  [cyan]Status[/cyan]      [green]● Active[/green]")
+        console.print()
+        console.print(Rule(style="dim"))
+        console.print()
+        console.print("[dim]Press Ctrl+C to stop[/dim]")
 
         # Keep running
         await asyncio.Event().wait()
 
     except KeyboardInterrupt:
+        console.print()
         console.print("\n[yellow]Shutting down...[/yellow]")
-    except Exception as e:
-        console.print(f"\n[red]Error: {e}[/red]")
-        raise typer.Exit(1)
-    finally:
         await client.close()
-        console.print("[green]✓[/green] Tunnel closed")
+        console.print("[green]✓[/green] Tunnel closed\n")
+    except Exception as e:
+        console.print()
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
 
 
 async def _run_from_config(config: ClientConfig) -> None:
