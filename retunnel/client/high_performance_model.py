@@ -48,11 +48,21 @@ class Tunnel:
     config: TunnelConfig
     tunnel_id: str = ""
     created_at: float = field(default_factory=time.time)
+    bytes_in: int = 0
+    bytes_out: int = 0
 
     @property
     def public_url(self) -> str:
         """Get the public URL for this tunnel"""
         return self.url
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get tunnel statistics"""
+        return {
+            "bytes_in": self.bytes_in,
+            "bytes_out": self.bytes_out,
+            "uptime": time.time() - self.created_at,
+        }
 
 
 class HighPerformanceClient:
@@ -192,8 +202,10 @@ class HighPerformanceClient:
 
         self.logger.info(f"Connecting to {self.server_addr}")
 
-        # Create session
-        self.session = aiohttp.ClientSession()
+        # Create session with proper timeout and connector settings
+        timeout = aiohttp.ClientTimeout(total=60)
+        connector = aiohttp.TCPConnector(limit=100, limit_per_host=10)
+        self.session = aiohttp.ClientSession(timeout=timeout, connector=connector)
 
         # Build WebSocket URL
         if self.server_addr.startswith(("ws://", "wss://")):
@@ -459,10 +471,16 @@ class HighPerformanceClient:
                             )
 
                             # Send to local service
-                            local_writer.write(full_request.encode())
+                            request_bytes = full_request.encode()
+                            local_writer.write(request_bytes)
                             if body:
                                 local_writer.write(body)
+                                request_bytes += body
                             await local_writer.drain()
+                            
+                            # Count incoming bytes
+                            if tunnel:
+                                tunnel.bytes_in += len(request_bytes)
 
                             # Read response
                             response_data = b""
@@ -541,6 +559,10 @@ class HighPerformanceClient:
                             }
 
                             await self._send_message(proxy_ws, response_msg)
+                            
+                            # Count outgoing bytes
+                            if tunnel:
+                                tunnel.bytes_out += len(response_body) + len(str(response_headers))
 
                         except Exception as e:
                             self.logger.error(
@@ -642,11 +664,14 @@ class HighPerformanceClient:
             if not ws.closed:
                 await ws.close()
 
-        # Close session
+        # Close session properly
         if self.session and not self.session.closed:
             await self.session.close()
-            # Small delay to ensure connections are properly closed
-            await asyncio.sleep(0.25)
+            # Wait for the underlying connections to close
+            await asyncio.sleep(0.1)
+            
+        # Small delay to allow aiohttp to clean up
+        await asyncio.sleep(0.1)
 
         # Clear tunnels
         self.tunnels.clear()

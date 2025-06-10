@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -28,6 +29,15 @@ app = typer.Typer(
     pretty_exceptions_show_locals=False,
 )
 console = Console()
+
+
+def _format_bytes(num: int) -> str:
+    """Format bytes to human readable format"""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if abs(num) < 1024.0:
+            return f"{num:3.1f}{unit}"
+        num /= 1024.0
+    return f"{num:.1f}TB"
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -292,9 +302,27 @@ async def _run_tunnel(
         console.print(Rule(style="dim"))
         console.print()
         console.print("[dim]Press Ctrl+C to stop[/dim]")
-
-        # Keep running
-        await asyncio.Event().wait()
+        console.print()
+        
+        # Keep running and show stats
+        last_stats_time = time.time()
+        stats_shown = False
+        while True:
+            try:
+                await asyncio.sleep(5)
+                # Show stats every 30 seconds
+                if time.time() - last_stats_time >= 30:
+                    stats = tunnel.get_stats()
+                    in_bytes = _format_bytes(stats['bytes_in'])
+                    out_bytes = _format_bytes(stats['bytes_out'])
+                    if stats_shown:
+                        # Clear previous line
+                        console.print("\r" + " " * 50 + "\r", end="")
+                    console.print(f"[dim]↑ {in_bytes}  ↓ {out_bytes}[/dim]", end="\r")
+                    stats_shown = True
+                    last_stats_time = time.time()
+            except asyncio.CancelledError:
+                break
 
     except KeyboardInterrupt:
         console.print()
@@ -305,6 +333,12 @@ async def _run_tunnel(
         console.print()
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
+    finally:
+        # Ensure client is closed
+        if 'client' in locals():
+            await client.close()
+        # Give asyncio time to clean up
+        await asyncio.sleep(0.1)
 
 
 async def _run_from_config(config: ClientConfig) -> None:
