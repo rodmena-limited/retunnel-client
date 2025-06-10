@@ -383,9 +383,23 @@ class HighPerformanceClient:
         """Handle server's request for a new proxy connection"""
         try:
             # Create new proxy WebSocket connection
-            ws_url = f"ws://{self.server_addr}/api/v1/ws/proxy"
+            # Build WebSocket URL from server address
+            if self.server_addr.startswith(("ws://", "wss://")):
+                # Extract the base URL and construct proxy endpoint
+                base_url = self.server_addr.replace("/api/v1/ws/tunnel", "")
+                ws_url = f"{base_url}/api/v1/ws/proxy"
+            else:
+                ws_url = f"ws://{self.server_addr}/api/v1/ws/proxy"
+            
+            # Include auth headers
+            headers = {}
+            if self.auth_token:
+                headers["Authorization"] = f"Bearer {self.auth_token}"
+            
+            self.logger.debug(f"Creating proxy connection to: {ws_url}")
+            
             if self.session:
-                proxy_ws = await self.session.ws_connect(ws_url)
+                proxy_ws = await self.session.ws_connect(ws_url, headers=headers, heartbeat=30)
             else:
                 raise RuntimeError("Session not initialized")
 
@@ -399,7 +413,7 @@ class HighPerformanceClient:
             task.add_done_callback(self.proxy_tasks.discard)
 
         except Exception as e:
-            self.logger.error(f"Error creating proxy connection: {e}")
+            self.logger.warning(f"Error creating proxy connection: {e} (URL: {ws_url if 'ws_url' in locals() else 'unknown'})")
 
     async def _handle_proxy_connection(
         self, proxy_ws: aiohttp.ClientWebSocketResponse
@@ -565,7 +579,7 @@ class HighPerformanceClient:
                                 tunnel.bytes_out += len(response_body) + len(str(response_headers))
 
                         except Exception as e:
-                            self.logger.error(
+                            self.logger.debug(
                                 f"Error handling proxy data: {e}"
                             )
 

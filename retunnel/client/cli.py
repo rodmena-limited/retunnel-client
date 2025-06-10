@@ -16,6 +16,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.rule import Rule
+from rich.live import Live
 
 from .. import __version__
 from ..core.config import AuthConfig, ClientConfig
@@ -33,11 +34,13 @@ console = Console()
 
 def _format_bytes(num: int) -> str:
     """Format bytes to human readable format"""
-    for unit in ['B', 'KB', 'MB', 'GB']:
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if abs(num) < 1024.0:
-            return f"{num:3.1f}{unit}"
+            if unit == 'B':
+                return f"{num:.0f}{unit}"
+            return f"{num:.1f}{unit}"
         num /= 1024.0
-    return f"{num:.1f}TB"
+    return f"{num:.1f}PB"
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -247,8 +250,14 @@ async def _run_tunnel(
     """Run a single tunnel."""
     # Suppress client logging to preserve Rich output
     import logging as _logging
-    _logging.getLogger("client").setLevel(_logging.WARNING)
-    _logging.getLogger("retunnel").setLevel(_logging.WARNING)
+    _logging.getLogger("client").setLevel(_logging.ERROR)
+    _logging.getLogger("retunnel").setLevel(_logging.ERROR)
+    _logging.getLogger("aiohttp").setLevel(_logging.ERROR)
+    _logging.getLogger("asyncio").setLevel(_logging.ERROR)
+    
+    # Disable the default KeyboardInterrupt traceback
+    import sys
+    sys.tracebacklimit = 0
     
     # Create client (server defaults to RETUNNEL_SERVER_ENDPOINT or localhost:6400)
     client = HighPerformanceClient(server, auth_token=token)
@@ -304,31 +313,32 @@ async def _run_tunnel(
         console.print("[dim]Press Ctrl+C to stop[/dim]")
         console.print()
         
-        # Keep running and show stats
-        last_stats_time = time.time()
-        stats_shown = False
-        while True:
-            try:
-                await asyncio.sleep(5)
-                # Show stats every 30 seconds
-                if time.time() - last_stats_time >= 30:
+        # Keep running and show stats using Live
+        try:
+            with Live(
+                "[dim]↑ 0B  ↓ 0B[/dim]",
+                console=console,
+                refresh_per_second=0.5,
+                transient=False
+            ) as live:
+                while True:
                     stats = tunnel.get_stats()
                     in_bytes = _format_bytes(stats['bytes_in'])
                     out_bytes = _format_bytes(stats['bytes_out'])
-                    if stats_shown:
-                        # Clear previous line
-                        console.print("\r" + " " * 50 + "\r", end="")
-                    console.print(f"[dim]↑ {in_bytes}  ↓ {out_bytes}[/dim]", end="\r")
-                    stats_shown = True
-                    last_stats_time = time.time()
-            except asyncio.CancelledError:
-                break
+                    
+                    # Update the live display
+                    live.update(f"[dim]↑ {in_bytes}  ↓ {out_bytes}[/dim]")
+                    
+                    await asyncio.sleep(2)
+        except KeyboardInterrupt:
+            pass
 
     except KeyboardInterrupt:
-        console.print()
-        console.print("\n[yellow]Shutting down...[/yellow]")
+        # Move to a clean line and show shutdown message
+        console.print()  # New line
+        console.print("[yellow]Shutting down tunnel...[/yellow]")
         await client.close()
-        console.print("[green]✓[/green] Tunnel closed\n")
+        console.print("[green]✓[/green] Tunnel closed successfully\n")
     except Exception as e:
         console.print()
         console.print(f"[red]Error:[/red] {e}")
