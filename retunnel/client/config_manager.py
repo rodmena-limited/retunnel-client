@@ -19,8 +19,8 @@ class ClientConfig:
     """ReTunnel client configuration"""
 
     auth_token: Optional[str] = None
-    server_url: str = "https://retunnel.net"
-    api_url: str = "https://retunnel.com"
+    server_url: str = "wss://retunnel.net"  # WebSocket endpoint for tunnels
+    api_url: str = "https://retunnel.net"  # REST API endpoint
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ClientConfig":

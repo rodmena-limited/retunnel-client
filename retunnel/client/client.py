@@ -21,6 +21,8 @@ from ..core.exceptions import (
 from ..core.protocol import (
     Auth,
     AuthResp,
+    ErrorResp,
+    Heartbeat,
     NewTunnel,
     Ping,
     Pong,
@@ -53,6 +55,7 @@ class Tunnel(BaseModel):
     url: str
     local_port: int
     config: TunnelConfig
+    subdomain: Optional[str] = None
 
 
 class ReTunnelClient:
@@ -155,11 +158,12 @@ class ReTunnelClient:
 
         # Send auth message
         auth_msg = Auth(
-            token=self.auth_token or "",
-            client_id=self.client_id,
-            version=self.VERSION,
-            os=platform.system(),
-            arch=platform.machine(),
+            ClientId=self.client_id,
+            Version=self.VERSION,
+            OS=platform.system(),
+            Arch=platform.machine(),
+            User=self.auth_token or "",  # Use User field for auth token
+            Password="",
         )
 
         await self._control_conn.send(auth_msg)
@@ -169,10 +173,10 @@ class ReTunnelClient:
         if not isinstance(resp, AuthResp):
             raise AuthenticationError("Invalid auth response")
 
-        if resp.error:
-            raise AuthenticationError(resp.error)
+        if resp.Error:
+            raise AuthenticationError(resp.Error)
 
-        self.client_id = resp.client_id
+        self.client_id = resp.ClientId
         logger.info(f"Authenticated with client ID: {self.client_id}")
 
     def _start_background_tasks(self) -> None:
@@ -197,9 +201,9 @@ class ReTunnelClient:
 
                 if isinstance(msg, ReqProxy):
                     # Server requesting proxy connection
-                    asyncio.create_task(
-                        self._handle_proxy_request(msg.tunnel_id)
-                    )
+                    # Since ReqProxy doesn't specify which tunnel, we'll handle it
+                    # when we get StartProxy which has the URL
+                    asyncio.create_task(self._handle_proxy_request_new())
                 elif isinstance(msg, Pong):
                     # Heartbeat response
                     logger.debug("Received pong")
@@ -221,6 +225,21 @@ class ReTunnelClient:
                     logger.error(f"Heartbeat error: {e}")
                     break
 
+    async def _subdomain_heartbeat_loop(self, subdomain: str) -> None:
+        """Send periodic heartbeats for subdomain keep-alive."""
+        while self._running and self._control_conn:
+            try:
+                heartbeat = Heartbeat(
+                    Subdomain=subdomain,
+                    Timestamp=asyncio.get_event_loop().time(),
+                )
+                await self._control_conn.send(heartbeat)
+                await asyncio.sleep(30)  # Send heartbeat every 30 seconds
+            except Exception as e:
+                if self._running:
+                    logger.error(f"Subdomain heartbeat error: {e}")
+                    break
+
     async def request_tunnel(self, config: TunnelConfig) -> Tunnel:
         """Request a new tunnel."""
         if not self._control_conn:
@@ -229,66 +248,97 @@ class ReTunnelClient:
         # Send tunnel request
         req_id = generate_id("req", 8)
         req = ReqTunnel(
-            req_id=req_id,
-            protocol=config.protocol,
-            subdomain=config.subdomain or "",
-            hostname=config.hostname or "",
-            auth=config.auth or "",
+            ReqId=req_id,
+            Protocol=config.protocol,
+            Subdomain=config.subdomain or "",
+            Hostname=config.hostname or "",
+            HttpAuth=config.auth or "",
         )
 
         await self._control_conn.send(req)
 
         # Wait for response
         resp = await self._control_conn.receive(timeout=10)
+
+        # Handle error response
+        if isinstance(resp, ErrorResp):
+            if resp.ErrorCode == "OVER_CAPACITY":
+                raise TunnelError(
+                    "No subdomains available. Please try again later."
+                )
+            else:
+                raise TunnelError(f"{resp.ErrorCode}: {resp.Message}")
+
         if not isinstance(resp, NewTunnel):
             raise TunnelError("Invalid tunnel response")
 
-        if resp.error:
-            raise TunnelError(resp.error)
+        if resp.Error:
+            raise TunnelError(resp.Error)
 
         # Create tunnel object
+        # Handle both old field names (tunnel_id) and new (TunnelId)
+        tunnel_id = (
+            getattr(resp, "TunnelId", None)
+            or getattr(resp, "tunnel_id", None)
+            or resp.Subdomain
+        )
         tunnel = Tunnel(
-            id=resp.tunnel_id,
-            protocol=resp.protocol,
-            url=resp.url,
+            id=tunnel_id,  # Use subdomain as ID for HTTP tunnels
+            protocol=resp.Protocol,
+            url=resp.Url,
             local_port=config.local_port,
             config=config,
+            subdomain=resp.Subdomain,
         )
 
         self._tunnels[tunnel.id] = tunnel
         logger.info(f"Tunnel created: {tunnel.url}")
 
+        # Start subdomain heartbeat for HTTP tunnels
+        if tunnel.subdomain and config.protocol == "http":
+            task = asyncio.create_task(
+                self._subdomain_heartbeat_loop(tunnel.subdomain)
+            )
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
         return tunnel
 
-    async def _handle_proxy_request(self, tunnel_id: str) -> None:
+    async def _handle_proxy_request_new(self) -> None:
         """Handle proxy connection request from server."""
-        tunnel = self._tunnels.get(tunnel_id)
-        if not tunnel:
-            logger.error(f"Unknown tunnel ID: {tunnel_id}")
-            return
-
         try:
             # Create proxy connection (use /api/v1/ws/proxy endpoint)
             proxy_url = self.server_addr.replace("/tunnel", "/proxy")
             proxy_conn = WebSocketConnection(proxy_url, self.auth_token)
             await proxy_conn.connect()
 
-            # Register proxy
+            # Register proxy with only client_id
             await proxy_conn.send(
                 RegProxy(
-                    client_id=self.client_id,
-                    tunnel_id=tunnel_id,
+                    ClientId=self.client_id,
                 )
             )
 
-            # Wait for StartProxy
+            # Wait for StartProxy which will tell us which tunnel
             msg = await proxy_conn.receive(timeout=5)
             if not isinstance(msg, StartProxy):
                 await proxy_conn.close()
                 return
 
-            # Start proxying
-            conn_id = msg.conn_id
+            # Find tunnel by URL
+            tunnel = None
+            for t in self._tunnels.values():
+                if msg.Url.startswith(t.url):
+                    tunnel = t
+                    break
+
+            if not tunnel:
+                logger.error(f"No tunnel found for URL: {msg.Url}")
+                await proxy_conn.close()
+                return
+
+            # Generate connection ID
+            conn_id = generate_id("conn", 8)
             self._proxy_conns[conn_id] = proxy_conn
 
             task = asyncio.create_task(

@@ -194,27 +194,38 @@ class HighPerformanceClient:
         # Use server from config if not provided
         if not self.server_addr:
             server_url = await config_manager.get_server_url()
-            # Extract host:port from URL
-            from urllib.parse import urlparse
-
-            parsed = urlparse(server_url)
-            self.server_addr = parsed.netloc or "retunnel.net"
+            self.server_addr = server_url
 
         self.logger.info(f"Connecting to {self.server_addr}")
 
-        # Create session with proper timeout and connector settings
+        # Create session with proper timeout and SSL settings
         timeout = aiohttp.ClientTimeout(total=60)
-        connector = aiohttp.TCPConnector(limit=100, limit_per_host=10)
+        # Disable SSL verification for development/self-signed certificates
+        ssl_context = False  # This disables SSL verification
+        connector = aiohttp.TCPConnector(
+            limit=100, limit_per_host=10, ssl=ssl_context
+        )
         self.session = aiohttp.ClientSession(
             timeout=timeout, connector=connector
         )
 
         # Build WebSocket URL
         if self.server_addr.startswith(("ws://", "wss://")):
-            ws_url = f"{self.server_addr}/api/v1/ws/tunnel"
+            # If already a WebSocket URL, ensure it has the right path
+            if "/api/v1/ws/tunnel" not in self.server_addr:
+                ws_url = f"{self.server_addr}/api/v1/ws/tunnel"
+            else:
+                ws_url = self.server_addr
         else:
             # Convert host:port to WebSocket URL
-            ws_url = f"ws://{self.server_addr}/api/v1/ws/tunnel"
+            # Default to wss:// for production domains
+            if (
+                "localhost" in self.server_addr
+                or "127.0.0.1" in self.server_addr
+            ):
+                ws_url = f"ws://{self.server_addr}/api/v1/ws/tunnel"
+            else:
+                ws_url = f"wss://{self.server_addr}/api/v1/ws/tunnel"
 
         # Connect to control WebSocket
         headers = {}
@@ -263,8 +274,8 @@ class HighPerformanceClient:
             "Type": "ReqTunnel",
             "ReqId": req_id,
             "Protocol": config.protocol,
-            "Hostname": "",
-            "Subdomain": "",
+            "Hostname": config.hostname or "",
+            "Subdomain": config.subdomain or "",
             "HttpAuth": config.auth or "",
             "RemotePort": config.remote_port or 0,
         }
@@ -281,28 +292,46 @@ class HighPerformanceClient:
             # Wait for response (with timeout)
             resp = await asyncio.wait_for(future, timeout=10.0)
 
+            # Check for error response
+            if resp.get("Type") == "ErrorResp":
+                error_code = resp.get("ErrorCode", "UNKNOWN")
+                message = resp.get("Message", "Unknown error")
+                if error_code == "OVER_CAPACITY":
+                    raise Exception(
+                        "No subdomains available. Please try again later."
+                    )
+                else:
+                    raise Exception(f"{error_code}: {message}")
+
             if resp.get("Error"):
                 raise Exception(f"Tunnel creation failed: {resp['Error']}")
 
             # Create tunnel object
-            # Transform URL from localhost:6400 to retunnel.net
             url = resp.get("Url", "")
-            if url:
-                # Replace http://localhost:6400 or http://anyhost:6400 with https://retunnel.net
-                import re
+            subdomain = resp.get("Subdomain", "")
+            tunnel_id = resp.get("TunnelId", "") or subdomain
 
-                url = re.sub(r"http://[^/]+/", "https://retunnel.net/", url)
+            # For HTTP tunnels with subdomains, ensure URL uses subdomain
+            if config.protocol == "http" and subdomain and url:
+                # URL should already be in subdomain format from server
+                # Just ensure it's using the right domain
+                if "localhost" in url or "127.0.0.1" in url:
+                    url = f"https://{subdomain}.retunnel.net"
 
             tunnel = Tunnel(
-                id=req_id,
+                id=tunnel_id,
                 url=url,
-                protocol=resp.get("Protocol", ""),
+                protocol=resp.get("Protocol", config.protocol),
                 config=config,
-                tunnel_id=resp.get("TunnelId", ""),
+                tunnel_id=tunnel_id,
             )
 
             self.tunnels[tunnel.id] = tunnel
             self.logger.info(f"Tunnel established: {tunnel.url}")
+
+            # Start subdomain heartbeat for HTTP tunnels
+            if config.protocol == "http" and subdomain:
+                asyncio.create_task(self._subdomain_heartbeat(subdomain))
 
             return tunnel
 
@@ -361,6 +390,13 @@ class HighPerformanceClient:
 
         if msg_type == "NewTunnel":
             # Response to tunnel request
+            req_id = msg.get("ReqId")
+            future = self.pending_requests.get(req_id) if req_id else None
+            if future and not future.done():
+                future.set_result(msg)
+
+        elif msg_type == "ErrorResp":
+            # Error response
             req_id = msg.get("ReqId")
             future = self.pending_requests.get(req_id) if req_id else None
             if future and not future.done():
@@ -636,6 +672,27 @@ class HighPerformanceClient:
             pass
         except Exception as e:
             self.logger.error(f"Heartbeat error: {e}")
+
+    async def _subdomain_heartbeat(self, subdomain: str) -> None:
+        """Send periodic heartbeats for subdomain keep-alive"""
+        try:
+            while self.control_ws and not self.control_ws.closed:
+                await asyncio.sleep(30)  # Send heartbeat every 30 seconds
+                if self.control_ws and not self.control_ws.closed:
+                    heartbeat = {
+                        "Type": "Heartbeat",
+                        "Subdomain": subdomain,
+                        "Timestamp": time.time(),
+                    }
+                    await self._send_message(self.control_ws, heartbeat)
+                    self.logger.debug(
+                        f"Sent subdomain heartbeat for {subdomain}"
+                    )
+        except asyncio.CancelledError:
+            # Normal shutdown
+            pass
+        except Exception as e:
+            self.logger.error(f"Subdomain heartbeat error: {e}")
 
     async def _control_loop(self) -> None:
         """Listen for control messages"""

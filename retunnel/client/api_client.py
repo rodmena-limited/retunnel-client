@@ -34,7 +34,9 @@ class ReTunnelAPIClient:
         """Async context manager entry"""
         # Add timeout for all requests (2 seconds)
         timeout = aiohttp.ClientTimeout(total=2)
-        self._session = ClientSession(timeout=timeout)
+        # Disable SSL verification for development/self-signed certificates
+        connector = aiohttp.TCPConnector(ssl=False)
+        self._session = ClientSession(timeout=timeout, connector=connector)
         return self
 
     async def __aexit__(
