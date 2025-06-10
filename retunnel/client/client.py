@@ -6,7 +6,6 @@ import asyncio
 import logging
 import os
 import platform
-import sys
 from typing import Any, Dict, Optional, Set
 
 from pydantic import BaseModel

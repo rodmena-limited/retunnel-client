@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set
 
 import aiohttp
-import msgpack
+import msgpack  # type: ignore[import-untyped]
 
 from ..utils.id import generate_client_id, generate_request_id
 from .api_client import APIError, ReTunnelAPIClient
@@ -55,7 +55,7 @@ class Tunnel:
     def public_url(self) -> str:
         """Get the public URL for this tunnel"""
         return self.url
-    
+
     def get_stats(self) -> Dict[str, Any]:
         """Get tunnel statistics"""
         return {
@@ -205,7 +205,9 @@ class HighPerformanceClient:
         # Create session with proper timeout and connector settings
         timeout = aiohttp.ClientTimeout(total=60)
         connector = aiohttp.TCPConnector(limit=100, limit_per_host=10)
-        self.session = aiohttp.ClientSession(timeout=timeout, connector=connector)
+        self.session = aiohttp.ClientSession(
+            timeout=timeout, connector=connector
+        )
 
         # Build WebSocket URL
         if self.server_addr.startswith(("ws://", "wss://")):
@@ -288,8 +290,9 @@ class HighPerformanceClient:
             if url:
                 # Replace http://localhost:6400 or http://anyhost:6400 with https://retunnel.net
                 import re
-                url = re.sub(r'http://[^/]+/', 'https://retunnel.net/', url)
-            
+
+                url = re.sub(r"http://[^/]+/", "https://retunnel.net/", url)
+
             tunnel = Tunnel(
                 id=req_id,
                 url=url,
@@ -336,7 +339,7 @@ class HighPerformanceClient:
                     if length == len(data) - 8:
                         # It's length-prefixed, extract actual data
                         data = data[8:]
-                except:
+                except Exception:
                     # Not length-prefixed
                     pass
 
@@ -384,22 +387,26 @@ class HighPerformanceClient:
         try:
             # Create new proxy WebSocket connection
             # Build WebSocket URL from server address
-            if self.server_addr.startswith(("ws://", "wss://")):
+            if self.server_addr and self.server_addr.startswith(
+                ("ws://", "wss://")
+            ):
                 # Extract the base URL and construct proxy endpoint
                 base_url = self.server_addr.replace("/api/v1/ws/tunnel", "")
                 ws_url = f"{base_url}/api/v1/ws/proxy"
             else:
                 ws_url = f"ws://{self.server_addr}/api/v1/ws/proxy"
-            
+
             # Include auth headers
             headers = {}
             if self.auth_token:
                 headers["Authorization"] = f"Bearer {self.auth_token}"
-            
+
             self.logger.debug(f"Creating proxy connection to: {ws_url}")
-            
+
             if self.session:
-                proxy_ws = await self.session.ws_connect(ws_url, headers=headers, heartbeat=30)
+                proxy_ws = await self.session.ws_connect(
+                    ws_url, headers=headers, heartbeat=30
+                )
             else:
                 raise RuntimeError("Session not initialized")
 
@@ -413,7 +420,9 @@ class HighPerformanceClient:
             task.add_done_callback(self.proxy_tasks.discard)
 
         except Exception as e:
-            self.logger.warning(f"Error creating proxy connection: {e} (URL: {ws_url if 'ws_url' in locals() else 'unknown'})")
+            self.logger.warning(
+                f"Error creating proxy connection: {e} (URL: {ws_url if 'ws_url' in locals() else 'unknown'})"
+            )
 
     async def _handle_proxy_connection(
         self, proxy_ws: aiohttp.ClientWebSocketResponse
@@ -491,7 +500,7 @@ class HighPerformanceClient:
                                 local_writer.write(body)
                                 request_bytes += body
                             await local_writer.drain()
-                            
+
                             # Count incoming bytes
                             if tunnel:
                                 tunnel.bytes_in += len(request_bytes)
@@ -499,7 +508,7 @@ class HighPerformanceClient:
                             # Read response
                             response_data = b""
                             status_code = 500  # Default status code
-                            response_headers = {}
+                            response_headers: Dict[str, str] = {}
                             response_body = b""
 
                             while True:
@@ -573,10 +582,12 @@ class HighPerformanceClient:
                             }
 
                             await self._send_message(proxy_ws, response_msg)
-                            
+
                             # Count outgoing bytes
                             if tunnel:
-                                tunnel.bytes_out += len(response_body) + len(str(response_headers))
+                                tunnel.bytes_out += len(response_body) + len(
+                                    str(response_headers)
+                                )
 
                         except Exception as e:
                             self.logger.debug(
@@ -683,7 +694,7 @@ class HighPerformanceClient:
             await self.session.close()
             # Wait for the underlying connections to close
             await asyncio.sleep(0.1)
-            
+
         # Small delay to allow aiohttp to clean up
         await asyncio.sleep(0.1)
 

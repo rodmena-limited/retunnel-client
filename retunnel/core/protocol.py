@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import struct
-from typing import Any, Dict, Optional, Type, TypeVar
+from typing import Dict, Optional, Type, TypeVar
 
 import msgpack  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field

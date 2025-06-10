@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import struct
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 import websockets
 

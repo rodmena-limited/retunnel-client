@@ -10,8 +10,6 @@ from .client.high_performance_model import (
     Tunnel,
     TunnelConfig,
 )
-
-ReTunnelClient = HighPerformanceClient  # Alias for backward compatibility
 from .core.exceptions import (
     AuthenticationError,
     ConfigurationError,
@@ -19,6 +17,8 @@ from .core.exceptions import (
     ReTunnelError,
     TunnelError,
 )
+
+ReTunnelClient = HighPerformanceClient  # Alias for backward compatibility
 
 __all__ = [
     "ReTunnelClient",

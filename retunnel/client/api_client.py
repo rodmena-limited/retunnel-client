@@ -2,7 +2,6 @@
 API client for ReTunnel server interactions
 """
 
-import json
 from typing import Any, Optional
 from urllib.parse import urljoin
 
@@ -87,7 +86,7 @@ class ReTunnelAPIClient:
                 )
                 raise APIError(response.status, error_msg)
 
-            return data
+            return data  # type: ignore[no-any-return]
 
     async def register_user(
         self, email: Optional[str] = None

@@ -4,19 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from pathlib import Path
 from typing import Optional
 
 import typer
 import yaml
 from rich.console import Console
+from rich.live import Live
 from rich.logging import RichHandler
 from rich.panel import Panel
-from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.rule import Rule
-from rich.live import Live
+from rich.table import Table
 
 from .. import __version__
 from ..core.config import AuthConfig, ClientConfig
@@ -34,13 +33,14 @@ console = Console()
 
 def _format_bytes(num: int) -> str:
     """Format bytes to human readable format"""
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-        if abs(num) < 1024.0:
-            if unit == 'B':
-                return f"{num:.0f}{unit}"
-            return f"{num:.1f}{unit}"
-        num /= 1024.0
-    return f"{num:.1f}PB"
+    size = float(num)
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if abs(size) < 1024.0:
+            if unit == "B":
+                return f"{size:.0f}{unit}"
+            return f"{size:.1f}{unit}"
+        size /= 1024.0
+    return f"{size:.1f}PB"
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -49,7 +49,14 @@ def setup_logging(level: str = "INFO") -> None:
         level=level,
         format="%(message)s",
         datefmt="[%X]",
-        handlers=[RichHandler(console=console, rich_tracebacks=True, show_time=False, show_path=False)],
+        handlers=[
+            RichHandler(
+                console=console,
+                rich_tracebacks=True,
+                show_time=False,
+                show_path=False,
+            )
+        ],
     )
 
 
@@ -213,14 +220,14 @@ def version() -> None:
 def credits() -> None:
     """Show open source credits."""
     console.print("\n[bold cyan]Open Source Credits[/bold cyan]\n")
-    
+
     table = Table(
         show_header=True,
         header_style="bold cyan",
         border_style="dim",
         show_edge=False,
         pad_edge=False,
-        box=None
+        box=None,
     )
     table.add_column("Package", style="cyan")
     table.add_column("License", style="green")
@@ -250,15 +257,17 @@ async def _run_tunnel(
     """Run a single tunnel."""
     # Suppress client logging to preserve Rich output
     import logging as _logging
+
     _logging.getLogger("client").setLevel(_logging.ERROR)
     _logging.getLogger("retunnel").setLevel(_logging.ERROR)
     _logging.getLogger("aiohttp").setLevel(_logging.ERROR)
     _logging.getLogger("asyncio").setLevel(_logging.ERROR)
-    
+
     # Disable the default KeyboardInterrupt traceback
     import sys
+
     sys.tracebacklimit = 0
-    
+
     # Create client (server defaults to RETUNNEL_SERVER_ENDPOINT or localhost:6400)
     client = HighPerformanceClient(server, auth_token=token)
 
@@ -266,10 +275,12 @@ async def _run_tunnel(
         # Clean header
         console.clear()
         console.print()
-        console.print(f"[bold cyan]ReTunnel[/bold cyan] [dim]v{__version__}[/dim]")
+        console.print(
+            f"[bold cyan]ReTunnel[/bold cyan] [dim]v{__version__}[/dim]"
+        )
         console.print("[dim]Secure tunnel service[/dim]")
         console.print()
-        
+
         # Connection progress
         with Progress(
             SpinnerColumn(spinner_name="dots", style="cyan"),
@@ -279,23 +290,31 @@ async def _run_tunnel(
         ) as progress:
             task = progress.add_task("Connecting", total=None)
             await client.connect()
-            progress.update(task, description="[green]✓[/green] Connected successfully")
+            progress.update(
+                task, description="[green]✓[/green] Connected successfully"
+            )
             await asyncio.sleep(0.3)
-        
-        console.print(f"[green]✓[/green] Connected to tunnel service")
+
+        console.print("[green]✓[/green] Connected to tunnel service")
         console.print(f"[dim]Client ID: {client.client_id}[/dim]")
         console.print()
 
         # Request tunnel
         with Progress(
             SpinnerColumn(spinner_name="dots", style="cyan"),
-            TextColumn(f"[cyan]Creating {config.protocol.upper()} tunnel...[/cyan]"),
+            TextColumn(
+                "[cyan]Creating {protocol} tunnel...[/cyan]".format(
+                    protocol=config.protocol.upper()
+                )
+            ),
             console=console,
             transient=True,
         ) as progress:
             task = progress.add_task("Creating", total=None)
             tunnel = await client.request_tunnel(config)
-            progress.update(task, description="[green]✓[/green] Tunnel created")
+            progress.update(
+                task, description="[green]✓[/green] Tunnel created"
+            )
             await asyncio.sleep(0.3)
 
         # Display tunnel info cleanly
@@ -306,29 +325,29 @@ async def _run_tunnel(
         console.print()
         console.print(f"  [cyan]Protocol[/cyan]    {tunnel.protocol.upper()}")
         console.print(f"  [cyan]Local port[/cyan]  {tunnel.config.local_port}")
-        console.print(f"  [cyan]Status[/cyan]      [green]● Active[/green]")
+        console.print("  [cyan]Status[/cyan]      [green]● Active[/green]")
         console.print()
         console.print(Rule(style="dim"))
         console.print()
         console.print("[dim]Press Ctrl+C to stop[/dim]")
         console.print()
-        
+
         # Keep running and show stats using Live
         try:
             with Live(
                 "[dim]↑ 0B  ↓ 0B[/dim]",
                 console=console,
                 refresh_per_second=0.5,
-                transient=False
+                transient=False,
             ) as live:
                 while True:
                     stats = tunnel.get_stats()
-                    in_bytes = _format_bytes(stats['bytes_in'])
-                    out_bytes = _format_bytes(stats['bytes_out'])
-                    
+                    in_bytes = _format_bytes(stats["bytes_in"])
+                    out_bytes = _format_bytes(stats["bytes_out"])
+
                     # Update the live display
                     live.update(f"[dim]↑ {in_bytes}  ↓ {out_bytes}[/dim]")
-                    
+
                     await asyncio.sleep(2)
         except KeyboardInterrupt:
             pass
@@ -345,7 +364,7 @@ async def _run_tunnel(
         raise typer.Exit(1)
     finally:
         # Ensure client is closed
-        if 'client' in locals():
+        if "client" in locals():
             await client.close()
         # Give asyncio time to clean up
         await asyncio.sleep(0.1)
