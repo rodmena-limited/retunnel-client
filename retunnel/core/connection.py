@@ -9,7 +9,7 @@ from typing import Any, Optional
 import websockets
 
 from .exceptions import ConnectionError
-from .protocol import Message, decode_message
+from .protocol import Message, deserialize_message, serialize_message
 
 
 class WebSocketConnection:
@@ -68,7 +68,7 @@ class WebSocketConnection:
 
                 # Decode and queue message
                 try:
-                    message = decode_message(msg_data[:msg_length])
+                    message = deserialize_message(msg_data[:msg_length])
                     await self._message_queue.put(message)
                 except Exception as e:
                     # Log but don't crash on decode errors
@@ -86,7 +86,11 @@ class WebSocketConnection:
             raise ConnectionError("Not connected")
 
         try:
-            data = message.pack()
+            # Serialize message
+            msg_data = serialize_message(message)
+            # Add length prefix
+            length_prefix = struct.pack(">Q", len(msg_data))
+            data = length_prefix + msg_data
             await self._ws.send(data)
         except Exception as e:
             raise ConnectionError(f"Send failed: {str(e)}")

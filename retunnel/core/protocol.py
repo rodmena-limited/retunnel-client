@@ -3,7 +3,7 @@ Message definitions for retunnel protocol
 """
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Dict, Optional, Union
 
 import msgpack
 
@@ -51,7 +51,7 @@ class ReqTunnel(Message):
     Subdomain: str = ""
     HttpAuth: str = ""
     RemotePort: int = 0
-    Config: dict[str, Any] | None = None
+    Config: Optional[Dict[str, Any]] = None
 
 
 @dataclass

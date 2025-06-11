@@ -62,7 +62,7 @@ addopts = [
     "--cov=retunnel",
     "--cov-report=term-missing",
     "--cov-report=xml",
-    "--cov-fail-under=27"
+    "--cov-fail-under=90"
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
