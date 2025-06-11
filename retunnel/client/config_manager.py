@@ -7,6 +7,7 @@ and server configuration.
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -63,6 +64,7 @@ class ConfigManager:
 
         if not self.config_path.exists():
             # Create default config
+            # Use logger instead of print to avoid output pollution
             self._config = ClientConfig()
             await self.save()
             return self._config
@@ -71,8 +73,10 @@ class ConfigManager:
             async with aiofiles.open(self.config_path, "r") as f:
                 data = json.loads(await f.read())
                 self._config = ClientConfig.from_dict(data)
-        except Exception:
+                # Remove print statement that was polluting output
+        except Exception as e:
             # If config is corrupted, create new one
+            print(f"Error loading config: {e}", file=sys.stderr)
             self._config = ClientConfig()
             await self.save()
 

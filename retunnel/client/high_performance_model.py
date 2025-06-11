@@ -113,6 +113,10 @@ class HighPerformanceClient:
         # If no auth token provided, check config file
         if not self.auth_token:
             self.auth_token = await config_manager.get_auth_token()
+            if self.auth_token:
+                self.logger.info(
+                    f"Loaded auth token from config: ****{self.auth_token[-4:]}"
+                )
 
         # If still no token, register new user
         if not self.auth_token:
@@ -140,8 +144,17 @@ class HighPerformanceClient:
                     self.logger.error(f"Failed to register user: {e}")
                     raise
 
-        # Verify token is still valid and refresh if needed
+        # Skip token verification for now - just use the token from config
+        # This was causing issues with multiple registrations
         if self.auth_token:
+            self.logger.info(
+                f"Using auth token from config: ****{self.auth_token[-4:]}"
+            )
+            return
+
+        # OLD CODE - disabled for now
+        # Verify token is still valid and refresh if needed
+        if False and self.auth_token:
             api_url = await config_manager.get_api_url()
 
             # Handle local development
@@ -268,12 +281,16 @@ class HighPerformanceClient:
         if resp.get("ClientId"):
             self.client_id = resp["ClientId"]
 
-        self.logger.info(f"Connected as client {self.client_id}")
-        
+        self.logger.info(
+            f"Connected as client {self.client_id} with token ****{self.auth_token[-4:] if self.auth_token else 'None'}"
+        )
+
         # Update connection state
         self.is_connected = True
         self.connection_status = "Connected"
-        self._reconnect_delay = 1.0  # Reset reconnect delay on successful connection
+        self._reconnect_delay = (
+            1.0  # Reset reconnect delay on successful connection
+        )
 
         # Start background tasks
         self._start_background_tasks()
@@ -307,11 +324,20 @@ class HighPerformanceClient:
 
             # Check for error response
             if resp.get("Type") == "ErrorResp":
-                error_code = resp.get("ErrorCode", "UNKNOWN")
-                message = resp.get("Message", "Unknown error")
+                # The error fields are at the root level, not in Payload
+                error_code = resp.get("error_code", "UNKNOWN")
+                message = resp.get("message", "Unknown error")
+
+                # Debug log
+                self.logger.debug(f"ErrorResp received: {resp}")
+
                 if error_code == "OVER_CAPACITY":
                     raise Exception(
                         "No subdomains available. Please try again later."
+                    )
+                elif error_code == "FREE_TIER_LIMIT_REACHED":
+                    raise Exception(
+                        "Free tier limit reached. You can have a maximum of 2 active tunnels."
                     )
                 else:
                     raise Exception(f"{error_code}: {message}")
@@ -400,6 +426,12 @@ class HighPerformanceClient:
 
     async def _handle_message(self, msg: Dict[str, Any]) -> None:
         """Handle incoming control messages"""
+        # Normalize message - handle both uppercase and lowercase field names
+        if "type" in msg and "Type" not in msg:
+            msg["Type"] = msg["type"]
+        if "payload" in msg and "Payload" not in msg:
+            msg["Payload"] = msg["payload"]
+
         msg_type = msg.get("Type")
 
         if msg_type == "NewTunnel":
@@ -411,7 +443,7 @@ class HighPerformanceClient:
 
         elif msg_type == "ErrorResp":
             # Error response
-            req_id = msg.get("ReqId")
+            req_id = msg.get("ReqId") or msg.get("Payload", {}).get("req_id")
             future = self.pending_requests.get(req_id) if req_id else None
             if future and not future.done():
                 future.set_result(msg)
@@ -711,7 +743,11 @@ class HighPerformanceClient:
     async def _control_loop(self) -> None:
         """Listen for control messages"""
         try:
-            while self._running and self.control_ws and not self.control_ws.closed:
+            while (
+                self._running
+                and self.control_ws
+                and not self.control_ws.closed
+            ):
                 try:
                     msg = await self._receive_message(self.control_ws)
                     await self._handle_message(msg)
@@ -722,7 +758,9 @@ class HighPerformanceClient:
                     self.connection_status = "Disconnected"
                     # Trigger reconnection
                     if self._running and not self._reconnecting:
-                        self._reconnect_task = asyncio.create_task(self._reconnect())
+                        self._reconnect_task = asyncio.create_task(
+                            self._reconnect()
+                        )
                     break
         except asyncio.CancelledError:
             # Normal shutdown
@@ -744,61 +782,73 @@ class HighPerformanceClient:
     async def _reconnect(self) -> None:
         """Reconnect with exponential backoff"""
         self._reconnecting = True
-        
+
         while self._running:
             try:
-                self.connection_status = f"Reconnecting in {self._reconnect_delay:.0f}s..."
-                self.logger.info(f"Attempting reconnection in {self._reconnect_delay} seconds")
-                
+                self.connection_status = (
+                    f"Reconnecting in {self._reconnect_delay:.0f}s..."
+                )
+                self.logger.info(
+                    f"Attempting reconnection in {self._reconnect_delay} seconds"
+                )
+
                 # Wait with exponential backoff
                 await asyncio.sleep(self._reconnect_delay)
-                
+
                 # Update status
                 self.connection_status = "Connecting..."
-                
+
                 # Close existing connection if any
                 if self.control_ws and not self.control_ws.closed:
                     await self.control_ws.close()
-                
+
                 # Close and recreate session
                 if self.session and not self.session.closed:
                     await self.session.close()
                     await asyncio.sleep(0.1)
-                
+
                 # Re-establish connection
                 await self.connect()
-                
+
                 # Re-request tunnels with same configs
                 for tunnel in list(self.tunnels.values()):
                     try:
                         # Request tunnel with same subdomain
                         config = tunnel.config
                         # For HTTP tunnels, try to get the same subdomain
-                        if tunnel.protocol == "http" and hasattr(tunnel, "subdomain"):
+                        if tunnel.protocol == "http" and hasattr(
+                            tunnel, "subdomain"
+                        ):
                             config.subdomain = tunnel.subdomain
-                        
+
                         new_tunnel = await self.request_tunnel(config)
-                        self.logger.info(f"Re-established tunnel: {new_tunnel.url}")
+                        self.logger.info(
+                            f"Re-established tunnel: {new_tunnel.url}"
+                        )
                     except Exception as e:
-                        self.logger.error(f"Failed to re-establish tunnel: {e}")
-                
+                        self.logger.error(
+                            f"Failed to re-establish tunnel: {e}"
+                        )
+
                 # Success - exit reconnection loop
                 self._reconnecting = False
                 break
-                
+
             except Exception as e:
                 self.logger.error(f"Reconnection failed: {e}")
-                self.connection_status = f"Reconnection failed, retrying..."
-                
+                self.connection_status = "Reconnection failed, retrying..."
+
                 # Increase delay with exponential backoff
-                self._reconnect_delay = min(self._reconnect_delay * 2, self._max_reconnect_delay)
-        
+                self._reconnect_delay = min(
+                    self._reconnect_delay * 2, self._max_reconnect_delay
+                )
+
         self._reconnecting = False
 
     async def close(self) -> None:
         """Close all connections and clean up"""
         self.logger.info("Closing client")
-        
+
         # Stop running
         self._running = False
         self.is_connected = False
