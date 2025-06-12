@@ -277,59 +277,79 @@ class HighPerformanceClient:
         if resp.get("Error"):
             # Handle invalid auth token by reactivating it
             if "Invalid auth token" in resp.get("Error", ""):
-                self.logger.info("Auth token invalid, attempting to reactivate...")
-                
+                self.logger.info(
+                    "Auth token invalid, attempting to reactivate..."
+                )
+
                 # Close the failed connection
                 await self.control_ws.close()
-                
+
                 # Store the old token before clearing
                 old_token = self.auth_token
-                
+
                 # Try to reactivate the token
                 api_url = await config_manager.get_api_url()
                 if self.server_addr and "localhost" in self.server_addr:
                     api_url = f"http://{self.server_addr}"
-                
+
                 async with ReTunnelAPIClient(api_url) as api:
                     try:
                         # First try to reactivate the existing token
                         result = await api.reactivate_token(old_token)
                         self.auth_token = result.get("auth_token")
                         if self.auth_token:
-                            await config_manager.set_auth_token(self.auth_token)
-                            self.logger.info(f"Successfully reactivated token for user {result.get('email')}")
+                            await config_manager.set_auth_token(
+                                self.auth_token
+                            )
+                            self.logger.info(
+                                f"Successfully reactivated token for user {result.get('email')}"
+                            )
                         else:
-                            raise ValueError("No auth token in reactivation response")
+                            raise ValueError(
+                                "No auth token in reactivation response"
+                            )
                     except APIError as e:
                         # If reactivation fails (token not found), register new user
                         if e.status == 404:
-                            self.logger.info("Token not found in system, registering new anonymous user...")
+                            self.logger.info(
+                                "Token not found in system, registering new anonymous user..."
+                            )
                             result = await api.register_user()
                             self.auth_token = result.get("auth_token")
                             if self.auth_token:
-                                await config_manager.set_auth_token(self.auth_token)
-                                self.logger.info("Successfully registered new user and saved auth token")
+                                await config_manager.set_auth_token(
+                                    self.auth_token
+                                )
+                                self.logger.info(
+                                    "Successfully registered new user and saved auth token"
+                                )
                             else:
-                                raise ValueError("No auth token in registration response")
+                                raise ValueError(
+                                    "No auth token in registration response"
+                                )
                         else:
                             raise Exception(f"Token reactivation failed: {e}")
                     except Exception as e:
                         self.logger.error(f"Failed to reactivate token: {e}")
-                        raise Exception(f"Authentication failed and could not reactivate token: {e}")
-                
+                        raise Exception(
+                            f"Authentication failed and could not reactivate token: {e}"
+                        )
+
                 # Reconnect with new token
                 headers = {"Authorization": f"Bearer {self.auth_token}"}
                 self.control_ws = await self.session.ws_connect(
                     ws_url, headers=headers, heartbeat=30
                 )
-                
+
                 # Retry authentication with new token
                 auth_msg["User"] = self.auth_token
                 await self._send_message(self.control_ws, auth_msg)
                 resp = await self._receive_message(self.control_ws)
-                
+
                 if resp.get("Error"):
-                    raise Exception(f"Authentication failed after token reactivation: {resp['Error']}")
+                    raise Exception(
+                        f"Authentication failed after token reactivation: {resp['Error']}"
+                    )
             else:
                 raise Exception(f"Authentication failed: {resp['Error']}")
 

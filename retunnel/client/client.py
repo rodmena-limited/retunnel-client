@@ -176,34 +176,40 @@ class ReTunnelClient:
         if resp.Error:
             # If auth failed due to invalid token, try to refresh it
             if "Invalid auth token" in resp.Error and self.auto_register:
-                logger.info("Auth token invalid, registering new anonymous user...")
-                
+                logger.info(
+                    "Auth token invalid, registering new anonymous user..."
+                )
+
                 # Close the failed connection
                 await self._control_conn.close()
-                
+
                 # Clear the invalid token
                 self.auth_token = None
                 self.auth_config.auth_token = None
-                
+
                 # Register new anonymous user
                 await self._auto_register()
-                
+
                 # Reconnect with new token
                 self._control_conn = WebSocketConnection(
                     self.server_addr, self.auth_token
                 )
                 await self._control_conn.connect()
-                
+
                 # Retry authentication with new token
                 auth_msg.User = self.auth_token or ""
                 await self._control_conn.send(auth_msg)
-                
+
                 resp = await self._control_conn.receive(timeout=10)
                 if not isinstance(resp, AuthResp):
-                    raise AuthenticationError("Invalid auth response after token refresh")
-                
+                    raise AuthenticationError(
+                        "Invalid auth response after token refresh"
+                    )
+
                 if resp.Error:
-                    raise AuthenticationError(f"Authentication failed after token refresh: {resp.Error}")
+                    raise AuthenticationError(
+                        f"Authentication failed after token refresh: {resp.Error}"
+                    )
             else:
                 raise AuthenticationError(resp.Error)
 
