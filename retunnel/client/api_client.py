@@ -141,3 +141,17 @@ class ReTunnelAPIClient:
             return True
         except APIError:
             return False
+
+    async def reactivate_token(self, old_token: str) -> dict[str, Any]:
+        """Reactivate an expired or invalid token
+
+        Args:
+            old_token: The old/invalid auth token
+
+        Returns:
+            New auth token data with same user account
+        """
+        data = {"old_token": old_token}
+        return await self._request(
+            "POST", "/api/v1/auth/reactivate-token", json_data=data
+        )
