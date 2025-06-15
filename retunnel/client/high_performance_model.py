@@ -9,6 +9,7 @@ import struct
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set
+from urllib.parse import urlparse, urlunparse
 
 import aiohttp
 import msgpack  # type: ignore[import-untyped]
@@ -609,7 +610,12 @@ class HighPerformanceClient:
 
                     if not tunnel:
                         self.logger.error(f"No tunnel found for URL: {url}")
+                        self.logger.error(f"Available tunnels: {list(self.tunnels.keys())}")
+                        for tid, t in self.tunnels.items():
+                            self.logger.error(f"  Tunnel {tid}: tunnel_id={t.tunnel_id}, url={t.url}")
                         break
+                    else:
+                        self.logger.info(f"Found tunnel for URL {url}: tunnel_id={tunnel.tunnel_id}, tunnel.url={tunnel.url}")
 
                     # Connect to local service
                     local_reader, local_writer = await asyncio.open_connection(
@@ -630,6 +636,8 @@ class HighPerformanceClient:
                             query = http_req.get("query", "")
                             headers = http_req.get("headers", {})
                             body = http_req.get("body", b"")
+                            
+                            self.logger.info(f"Incoming request: {method} {path}{'?' + query if query else ''}")
 
                             # Build request line
                             if query:
@@ -726,6 +734,58 @@ class HighPerformanceClient:
                                             response_body += chunk
 
                                     break
+
+                            # Log response details for debugging
+                            self.logger.debug(f"Response status: {status_code}")
+                            self.logger.debug(f"Response headers: {response_headers}")
+
+                            # Handle redirects (301, 302, 303, 307, 308)
+                            if status_code in [301, 302, 303, 307, 308]:
+                                self.logger.info(f"Processing redirect with status {status_code}")
+                                
+                                # Check for Location header (case-insensitive)
+                                location_key = None
+                                location_value = None
+                                for key, value in response_headers.items():
+                                    if key.lower() == "location":
+                                        location_key = key
+                                        location_value = value
+                                        break
+                                
+                                if location_value and tunnel:
+                                    self.logger.info(f"Original Location header: {location_value}")
+                                    
+                                    # Parse the location URL
+                                    if location_value.startswith("/"):
+                                        # Relative URL - prepend tunnel URL
+                                        # Remove trailing slash from tunnel URL if present
+                                        base_url = tunnel.url.rstrip("/")
+                                        new_location = f"{base_url}{location_value}"
+                                        response_headers[location_key] = new_location
+                                        self.logger.info(f"Rewritten relative redirect to: {new_location}")
+                                    elif location_value.startswith("http://localhost") or location_value.startswith("http://127.0.0.1") or location_value.startswith("https://localhost") or location_value.startswith("https://127.0.0.1"):
+                                        # Absolute URL pointing to localhost (with or without port)
+                                        # Extract the path and query
+                                        try:
+                                            parsed = urlparse(location_value)
+                                            # Reconstruct with tunnel URL
+                                            tunnel_parsed = urlparse(tunnel.url)
+                                            new_location = urlunparse((
+                                                tunnel_parsed.scheme,
+                                                tunnel_parsed.netloc,
+                                                parsed.path,
+                                                parsed.params,
+                                                parsed.query,
+                                                parsed.fragment
+                                            ))
+                                            response_headers[location_key] = new_location
+                                            self.logger.info(f"Rewritten absolute localhost redirect to: {new_location}")
+                                        except Exception as e:
+                                            self.logger.error(f"Error parsing redirect URL: {e}")
+                                    else:
+                                        self.logger.info(f"Not rewriting external redirect: {location_value}")
+                                else:
+                                    self.logger.warning(f"Redirect response but no Location header found. Headers: {response_headers}")
 
                             # Send response back
                             response_meta = {
