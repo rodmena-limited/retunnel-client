@@ -1612,7 +1612,7 @@ wheels = [
 
 [[package]]
 name = "retunnel"
-version = "2.0.1"
+version = "2.0.2"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
@@ -1649,8 +1649,11 @@ dev = [
     { name = "build" },
     { name = "flake8" },
     { name = "isort" },
+    { name = "mypy" },
     { name = "pytest" },
     { name = "twine" },
+    { name = "types-aiofiles" },
+    { name = "types-pyyaml" },
 ]
 
 [package.metadata]
@@ -1686,8 +1689,11 @@ dev = [
     { name = "build", specifier = ">=1.2.2.post1" },
     { name = "flake8", specifier = ">=7.2.0" },
     { name = "isort", specifier = ">=6.0.1" },
+    { name = "mypy", specifier = ">=1.16.0" },
     { name = "pytest", specifier = ">=8.4.0" },
     { name = "twine", specifier = ">=6.1.0" },
+    { name = "types-aiofiles", specifier = ">=24.1.0.20250606" },
+    { name = "types-pyyaml", specifier = ">=6.0.12.20250516" },
 ]
 
 [[package]]

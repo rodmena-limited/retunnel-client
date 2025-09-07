@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "retunnel"
-version = "2.0.1"
+version = "2.0.2"
 description = "ReTunnel - Securely expose local servers to the internet"
 authors = [{name = "ReTunnel Team", email = "support@retunnel.com"}]
 license = {text = "MIT"}
@@ -148,6 +148,9 @@ dev = [
     "build>=1.2.2.post1",
     "flake8>=7.2.0",
     "isort>=6.0.1",
+    "mypy>=1.16.0",
     "pytest>=8.4.0",
     "twine>=6.1.0",
+    "types-aiofiles>=24.1.0.20250606",
+    "types-pyyaml>=6.0.12.20250516",
 ]

@@ -5,7 +5,7 @@ Message definitions for retunnel protocol
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-import msgpack
+import msgpack  # type: ignore[import-untyped]
 
 
 @dataclass
