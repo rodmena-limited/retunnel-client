@@ -725,16 +725,32 @@ class HighPerformanceClient:
                                     # Get body
                                     response_body = response_data[body_start:]
 
-                                    # Check content length
-                                    content_length = response_headers.get(
-                                        "Content-Length"
-                                    )
+                                    # Check content length (case-insensitive)
+                                    content_length = None
+                                    for key, value in response_headers.items():
+                                        if key.lower() == "content-length":
+                                            content_length = value
+                                            break
+
                                     if content_length:
                                         expected_length = int(content_length)
                                         while (
                                             len(response_body)
                                             < expected_length
                                         ):
+                                            chunk = (
+                                                await local_reader.read(8192)
+                                                if local_reader
+                                                else b""
+                                            )
+                                            if not chunk:
+                                                break
+                                            response_body += chunk
+                                    else:
+                                        # No content-length, read until connection closes.
+                                        # This handles chunked encoding and other cases where the
+                                        # end of the response is signaled by closing the connection.
+                                        while True:
                                             chunk = (
                                                 await local_reader.read(8192)
                                                 if local_reader

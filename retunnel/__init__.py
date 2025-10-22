@@ -1,6 +1,6 @@
 """ReTunnel - Securely expose local servers to the internet."""
 
-__version__ = "2.0.0"
+__version__ = "2.0.3"
 __author__ = "ReTunnel Team"
 __email__ = "support@retunnel.com"
 __url__ = "https://retunnel.com"
