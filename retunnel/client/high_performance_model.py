@@ -8,7 +8,7 @@ import platform
 import struct
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Optional, Set, List
 from urllib.parse import urlparse, urlunparse
 
 import aiohttp
@@ -19,6 +19,16 @@ from .api_client import APIError, ReTunnelAPIClient
 from .config_manager import config_manager
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Request:
+    """Represents a single HTTP request"""
+
+    method: str
+    path: str
+    status: int
+    time: float
 
 
 @dataclass
@@ -96,6 +106,7 @@ class HighPerformanceClient:
         self._max_reconnect_delay = 16.0
         self._reconnecting = False
         self._running = True
+        self.requests: asyncio.Queue[Request] = asyncio.Queue(maxsize=100)
 
         # Configuration
         self.version = "2.3.40"
@@ -108,6 +119,13 @@ class HighPerformanceClient:
         self._reconnect_task: Optional[asyncio.Task[Any]] = None
 
         self.logger = logging.getLogger(f"client.{self.client_id}")
+
+    def get_requests(self) -> List[Request]:
+        """Get all requests from the queue"""
+        requests = []
+        while not self.requests.empty():
+            requests.append(self.requests.get_nowait())
+        return requests
 
     async def _ensure_auth_token(self) -> None:
         """Ensure we have a valid auth token"""
@@ -660,8 +678,21 @@ class HighPerformanceClient:
 
                             # Build headers
                             header_lines = []
+                            has_connection_header = False
                             for key, value in headers.items():
+                                # Replace Host header with localhost for dev servers
+                                # Many dev servers (Vite, webpack-dev-server, etc.) only accept localhost
+                                if key.lower() == "host" and tunnel:
+                                    value = f"localhost:{tunnel.config.local_port}"
+                                # Track if Connection header is present
+                                if key.lower() == "connection":
+                                    has_connection_header = True
+                                    value = "keep-alive"  # Force keep-alive for local connection
                                 header_lines.append(f"{key}: {value}")
+
+                            # Ensure Connection: keep-alive for HTTP/1.1 persistent connections
+                            if not has_connection_header:
+                                header_lines.append("Connection: keep-alive")
 
                             # Combine request
                             full_request = (
@@ -672,11 +703,36 @@ class HighPerformanceClient:
 
                             # Send to local service
                             request_bytes = full_request.encode()
-                            local_writer.write(request_bytes)
-                            if body:
-                                local_writer.write(body)
-                                request_bytes += body
-                            await local_writer.drain()
+
+                            # Handle potential broken pipe - reconnect if needed
+                            try:
+                                local_writer.write(request_bytes)
+                                if body:
+                                    local_writer.write(body)
+                                    request_bytes += body
+                                await local_writer.drain()
+                            except (BrokenPipeError, ConnectionResetError) as e:
+                                self.logger.warning(f"Local connection broken ({e}), reconnecting...")
+                                # Close old connection
+                                if local_writer:
+                                    local_writer.close()
+                                    try:
+                                        await local_writer.wait_closed()
+                                    except Exception:
+                                        pass
+
+                                # Reconnect
+                                if tunnel:
+                                    local_reader, local_writer = await asyncio.open_connection(
+                                        "127.0.0.1", tunnel.config.local_port
+                                    )
+                                    self.logger.info("Reconnected to local service")
+
+                                    # Retry sending request
+                                    local_writer.write(request_bytes)
+                                    await local_writer.drain()
+                                else:
+                                    raise  # No tunnel context, can't reconnect
 
                             # Count incoming bytes
                             if tunnel:
@@ -732,35 +788,78 @@ class HighPerformanceClient:
                                             content_length = value
                                             break
 
+                                    # Check for Transfer-Encoding: chunked
+                                    is_chunked = False
+                                    for key, value in response_headers.items():
+                                        if key.lower() == "transfer-encoding" and "chunked" in value.lower():
+                                            is_chunked = True
+                                            break
+
                                     if content_length:
+                                        # Read exact number of bytes specified by Content-Length
                                         expected_length = int(content_length)
                                         while (
                                             len(response_body)
                                             < expected_length
                                         ):
                                             chunk = (
-                                                await local_reader.read(8192)
-                                                if local_reader
-                                                else b""
+                                                await asyncio.wait_for(
+                                                    local_reader.read(8192) if local_reader else asyncio.sleep(0),
+                                                    timeout=5.0
+                                                )
                                             )
                                             if not chunk:
                                                 break
                                             response_body += chunk
-                                    else:
-                                        # No content-length, read until connection closes.
-                                        # This handles chunked encoding and other cases where the
-                                        # end of the response is signaled by closing the connection.
+                                        break
+                                    elif is_chunked:
+                                        # Handle chunked transfer encoding
+                                        # Read chunks until we see "0\r\n\r\n" terminator
                                         while True:
-                                            chunk = (
-                                                await local_reader.read(8192)
-                                                if local_reader
-                                                else b""
+                                            # Read chunk size line
+                                            chunk = await asyncio.wait_for(
+                                                local_reader.read(8192) if local_reader else asyncio.sleep(0),
+                                                timeout=5.0
                                             )
                                             if not chunk:
                                                 break
                                             response_body += chunk
+                                            # Check for chunk terminator
+                                            if b"\r\n0\r\n\r\n" in response_body or b"\n0\n\n" in response_body:
+                                                break
+                                        break
+                                    else:
+                                        # No Content-Length or Transfer-Encoding
+                                        # For HTTP/1.1, this means read until timeout or a small delay with no data
+                                        # Use a timeout-based approach
+                                        try:
+                                            while True:
+                                                chunk = await asyncio.wait_for(
+                                                    local_reader.read(8192) if local_reader else asyncio.sleep(0),
+                                                    timeout=0.5  # 500ms timeout for additional data
+                                                )
+                                                if not chunk:
+                                                    break
+                                                response_body += chunk
+                                        except asyncio.TimeoutError:
+                                            # Timeout means response is complete
+                                            pass
+                                        break
 
-                                    break
+                            # Add to inspector if enabled
+                            if tunnel and tunnel.config.inspect:
+                                req = Request(
+                                    method=method,
+                                    path=path,
+                                    status=status_code,
+                                    time=time.time(),
+                                )
+                                try:
+                                    self.requests.put_nowait(req)
+                                except asyncio.QueueFull:
+                                    # If queue is full, discard oldest request
+                                    self.requests.get_nowait()
+                                    self.requests.put_nowait(req)
 
                             # Log response details for debugging
                             self.logger.debug(
@@ -876,8 +975,8 @@ class HighPerformanceClient:
                                 )
 
                         except Exception as e:
-                            self.logger.debug(
-                                f"Error handling proxy data: {e}"
+                            self.logger.error(
+                                f"Error handling proxy data: {e}", exc_info=True
                             )
 
         except asyncio.CancelledError:

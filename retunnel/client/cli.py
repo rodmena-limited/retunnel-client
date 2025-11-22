@@ -75,20 +75,24 @@ def _format_bytes(num: int) -> str:
     return f"{size:.1f}PB"
 
 
-def setup_logging(level: str = "INFO") -> None:
+def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> None:
     """Set up logging with rich handler."""
+    handlers = [
+        RichHandler(
+            console=console,
+            rich_tracebacks=True,
+            show_time=False,
+            show_path=False,
+        )
+    ]
+    if log_file:
+        handlers.append(logging.FileHandler(log_file))
+
     logging.basicConfig(
         level=level,
         format="%(message)s",
         datefmt="[%X]",
-        handlers=[
-            RichHandler(
-                console=console,
-                rich_tracebacks=True,
-                show_time=False,
-                show_path=False,
-            )
-        ],
+        handlers=handlers,
     )
 
 
@@ -111,9 +115,10 @@ def http(
         None, "--token", help="Authentication token"
     ),
     log_level: str = typer.Option("INFO", "--log-level", help="Logging level"),
+    inspect: bool = typer.Option(True, "--inspect", help="Inspect requests"),
 ) -> None:
     """Create an HTTP tunnel to expose a local port."""
-    setup_logging(log_level)
+    setup_logging(log_level, log_file="nohup.out")
 
     config = TunnelConfig(
         protocol="http",
@@ -121,6 +126,7 @@ def http(
         subdomain=subdomain,
         hostname=hostname,
         auth=auth,
+        inspect=inspect,
     )
 
     asyncio.run(_run_tunnel(config, server, token))
@@ -455,9 +461,13 @@ async def _run_tunnel(
     # Create client (server defaults to RETUNNEL_SERVER_ENDPOINT or localhost:6400)
     client = HighPerformanceClient(server, auth_token=token)
 
+    # Simple output for non-interactive terminals
+    is_tty = sys.stdout.isatty()
+
     try:
         # Clean header
-        console.clear()
+        if is_tty:
+            console.clear()
 
         # Display welcome banner
         welcome_panel = Panel(
@@ -530,10 +540,41 @@ async def _run_tunnel(
 
         # Create layout for tunnel info and traffic stats
         layout = Layout()
-        layout.split_column(
-            Layout(tunnel_panel, name="info", size=8),
-            Layout(name="stats", size=3),
-        )
+        if config.inspect:
+            layout.split_column(
+                Layout(name="main", ratio=2),
+                Layout(name="inspector", ratio=1),
+            )
+            layout["main"].split_row(
+                Layout(tunnel_panel, name="info", ratio=2),
+                Layout(name="stats", ratio=1),
+            )
+
+            # Create inspector table
+            inspector_table = Table(
+                show_header=True,
+                header_style="bold magenta",
+                box=None,
+                padding=(0, 1),
+            )
+            inspector_table.add_column("Method")
+            inspector_table.add_column("Path")
+            inspector_table.add_column("Status")
+            inspector_table.add_column("Time")
+
+            inspector_panel = Panel(
+                inspector_table,
+                title="[bold]Request Inspector[/bold]",
+                border_style=RETUNNEL_THEME["primary"],
+            )
+            layout["inspector"].update(inspector_panel)
+
+        else:
+            layout.split_column(
+                Layout(tunnel_panel, name="info", size=8),
+                Layout(name="stats", size=3),
+            )
+
 
         # Initial stats panel
         initial_stats = Panel(
@@ -562,83 +603,103 @@ async def _run_tunnel(
 
         # Keep running and show stats using Live
         try:
-            with Live(
-                layout, console=console, refresh_per_second=2, transient=False
-            ) as live:
+            if is_tty:
+                with Live(
+                    layout, console=console, refresh_per_second=2, transient=False
+                ) as live:
+                    while True:
+                        # Update connection status
+                        if client.is_connected:
+                            status_text = f"[{RETUNNEL_THEME['success']}]● Active[/{RETUNNEL_THEME['success']}]"
+                        elif client._reconnecting:
+                            status_text = f"[{RETUNNEL_THEME['warning']}]⟳ {client.connection_status}[/{RETUNNEL_THEME['warning']}]"
+                        else:
+                            status_text = f"[{RETUNNEL_THEME['error']}]● {client.connection_status}[/{RETUNNEL_THEME['error']}]"
+
+                        # Rebuild tunnel table with updated status
+                        tunnel_table = Table(
+                            show_header=False, box=None, padding=(0, 2)
+                        )
+                        tunnel_table.add_column(style=f"{RETUNNEL_THEME['dim']}")
+                        tunnel_table.add_column(style="bold")
+
+                        tunnel_table.add_row(
+                            "URL",
+                            f"[bold {RETUNNEL_THEME['success']}]{tunnel.url}[/bold {RETUNNEL_THEME['success']}]",
+                        )
+                        tunnel_table.add_row("Protocol", tunnel.protocol.upper())
+                        tunnel_table.add_row(
+                            "Local Port", str(tunnel.config.local_port)
+                        )
+                        tunnel_table.add_row("Status", status_text)
+
+                        # Add auth token display (last 4 characters)
+                        if client.auth_token:
+                            token_display = f"****{client.auth_token[-4:]}"
+                        else:
+                            token_display = "None"
+                        tunnel_table.add_row(
+                            "Token",
+                            f"[{RETUNNEL_THEME['dim']}]{token_display}[/{RETUNNEL_THEME['dim']}]",
+                        )
+
+                        tunnel_panel = Panel(
+                            tunnel_table,
+                            title="[bold]Tunnel Details[/bold]",
+                            border_style=(
+                                RETUNNEL_THEME["success"]
+                                if client.is_connected
+                                else RETUNNEL_THEME["warning"]
+                            ),
+                            padding=(1, 2),
+                        )
+
+                        layout["info"].update(tunnel_panel)
+
+                        # Update traffic stats
+                        stats = tunnel.get_stats()
+                        in_bytes = _format_bytes(stats["bytes_in"])
+                        out_bytes = _format_bytes(stats["bytes_out"])
+                        uptime = int(stats.get("uptime", 0))
+                        uptime_str = f"{uptime // 60}m {uptime % 60}s"
+
+                        # Create traffic stats panel
+                        stats_content = Columns(
+                            [
+                                f"[{RETUNNEL_THEME['primary']}]↑ Upload[/{RETUNNEL_THEME['primary']}] {in_bytes}",
+                                f"[{RETUNNEL_THEME['primary']}]↓ Download[/{RETUNNEL_THEME['primary']}] {out_bytes}",
+                                f"[{RETUNNEL_THEME['dim']}]Uptime {uptime_str}[/{RETUNNEL_THEME['dim']}]",
+                            ],
+                            expand=True,
+                            align="center",
+                        )
+
+                        stats_panel = Panel(
+                            Align.center(stats_content, vertical="middle"),
+                            title="[bold]Traffic[/bold]",
+                            border_style=RETUNNEL_THEME["info"],
+                        )
+
+                        layout["stats"].update(stats_panel)
+
+                        # Update inspector
+                        if config.inspect:
+                            requests = client.get_requests()
+                            for req in requests:
+                                logging.info(
+                                    f"[Request] {req.method} {req.path} - {req.status}"
+                                )
+
+                        await asyncio.sleep(1)
+            else:
+                # Non-interactive mode
+                console.print(f"Tunnel URL: {tunnel.url}")
                 while True:
-                    # Update connection status
-                    if client.is_connected:
-                        status_text = f"[{RETUNNEL_THEME['success']}]● Active[/{RETUNNEL_THEME['success']}]"
-                    elif client._reconnecting:
-                        status_text = f"[{RETUNNEL_THEME['warning']}]⟳ {client.connection_status}[/{RETUNNEL_THEME['warning']}]"
-                    else:
-                        status_text = f"[{RETUNNEL_THEME['error']}]● {client.connection_status}[/{RETUNNEL_THEME['error']}]"
-
-                    # Rebuild tunnel table with updated status
-                    tunnel_table = Table(
-                        show_header=False, box=None, padding=(0, 2)
-                    )
-                    tunnel_table.add_column(style=f"{RETUNNEL_THEME['dim']}")
-                    tunnel_table.add_column(style="bold")
-
-                    tunnel_table.add_row(
-                        "URL",
-                        f"[bold {RETUNNEL_THEME['success']}]{tunnel.url}[/bold {RETUNNEL_THEME['success']}]",
-                    )
-                    tunnel_table.add_row("Protocol", tunnel.protocol.upper())
-                    tunnel_table.add_row(
-                        "Local Port", str(tunnel.config.local_port)
-                    )
-                    tunnel_table.add_row("Status", status_text)
-
-                    # Add auth token display (last 4 characters)
-                    if client.auth_token:
-                        token_display = f"****{client.auth_token[-4:]}"
-                    else:
-                        token_display = "None"
-                    tunnel_table.add_row(
-                        "Token",
-                        f"[{RETUNNEL_THEME['dim']}]{token_display}[/{RETUNNEL_THEME['dim']}]",
-                    )
-
-                    tunnel_panel = Panel(
-                        tunnel_table,
-                        title="[bold]Tunnel Details[/bold]",
-                        border_style=(
-                            RETUNNEL_THEME["success"]
-                            if client.is_connected
-                            else RETUNNEL_THEME["warning"]
-                        ),
-                        padding=(1, 2),
-                    )
-
-                    layout["info"].update(tunnel_panel)
-
-                    # Update traffic stats
-                    stats = tunnel.get_stats()
-                    in_bytes = _format_bytes(stats["bytes_in"])
-                    out_bytes = _format_bytes(stats["bytes_out"])
-                    uptime = int(stats.get("uptime", 0))
-                    uptime_str = f"{uptime // 60}m {uptime % 60}s"
-
-                    # Create traffic stats panel
-                    stats_content = Columns(
-                        [
-                            f"[{RETUNNEL_THEME['primary']}]↑ Upload[/{RETUNNEL_THEME['primary']}] {in_bytes}",
-                            f"[{RETUNNEL_THEME['primary']}]↓ Download[/{RETUNNEL_THEME['primary']}] {out_bytes}",
-                            f"[{RETUNNEL_THEME['dim']}]Uptime {uptime_str}[/{RETUNNEL_THEME['dim']}]",
-                        ],
-                        expand=True,
-                        align="center",
-                    )
-
-                    stats_panel = Panel(
-                        Align.center(stats_content, vertical="middle"),
-                        title="[bold]Traffic[/bold]",
-                        border_style=RETUNNEL_THEME["info"],
-                    )
-
-                    layout["stats"].update(stats_panel)
+                    requests = client.get_requests()
+                    for req in requests:
+                        logging.info(
+                            f"[Request] {req.method} {req.path} - {req.status}"
+                        )
                     await asyncio.sleep(1)
         except KeyboardInterrupt:
             pass
