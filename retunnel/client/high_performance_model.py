@@ -108,6 +108,11 @@ class HighPerformanceClient:
         self._running = True
         self.requests: asyncio.Queue[Request] = asyncio.Queue(maxsize=100)
 
+        # Heartbeat tracking
+        self._last_ping_sent: float = 0.0
+        self._last_pong_received: float = 0.0
+        self._pong_timeout: float = 30.0  # Consider dead if no Pong within 30s
+
         # Configuration
         self.version = "2.3.40"
         self.mm_version = "2.3"
@@ -556,7 +561,8 @@ class HighPerformanceClient:
                 await self._send_message(self.control_ws, {"Type": "Pong"})
 
         elif msg_type == "Pong":
-            # Server's response to our ping - just log it
+            # Server's response to our ping - record timestamp
+            self._last_pong_received = time.time()
             self.logger.debug("Received pong from server")
 
         else:
@@ -1009,18 +1015,73 @@ class HighPerformanceClient:
         )
 
     async def _heartbeat_loop(self) -> None:
-        """Send periodic heartbeat pings"""
+        """Send periodic heartbeat pings and track Pong responses"""
         try:
+            # Initialize pong received time on start
+            self._last_pong_received = time.time()
+
             while self.control_ws and not self.control_ws.closed:
                 await asyncio.sleep(20)
+
+                # Watchdog: validate is_connected matches actual WebSocket state
+                ws_connected = (
+                    self.control_ws is not None and not self.control_ws.closed
+                )
+                if self.is_connected and not ws_connected:
+                    self.logger.warning(
+                        "Connection state drift detected: is_connected=True "
+                        "but WebSocket is closed"
+                    )
+                    self.is_connected = False
+                    self.connection_status = "Disconnected"
+                    if self._running and not self._reconnecting:
+                        self._reconnect_task = asyncio.create_task(
+                            self._reconnect()
+                        )
+                    break
+
                 if self.control_ws and not self.control_ws.closed:
-                    await self._send_message(self.control_ws, {"Type": "Ping"})
-                    self.logger.debug("Sent heartbeat ping")
+                    # Check if previous Pong was received (if we sent a Ping)
+                    if self._last_ping_sent > 0:
+                        time_since_pong = time.time() - self._last_pong_received
+                        if time_since_pong > self._pong_timeout:
+                            self.logger.warning(
+                                f"Pong timeout: no response in {time_since_pong:.1f}s "
+                                f"(timeout: {self._pong_timeout}s)"
+                            )
+                            self.is_connected = False
+                            self.connection_status = "Disconnected"
+                            # Trigger reconnection
+                            if self._running and not self._reconnecting:
+                                self._reconnect_task = asyncio.create_task(
+                                    self._reconnect()
+                                )
+                            break
+
+                    # Send Ping and record timestamp
+                    # Use try/except to handle race condition where connection
+                    # closes between the check and send
+                    try:
+                        self._last_ping_sent = time.time()
+                        await self._send_message(self.control_ws, {"Type": "Ping"})
+                        self.logger.debug("Sent heartbeat ping")
+                    except (ConnectionResetError, BrokenPipeError, OSError) as e:
+                        self.logger.warning(f"Connection lost during heartbeat: {e}")
+                        self.is_connected = False
+                        self.connection_status = "Disconnected"
+                        if self._running and not self._reconnecting:
+                            self._reconnect_task = asyncio.create_task(
+                                self._reconnect()
+                            )
+                        break
         except asyncio.CancelledError:
             # Normal shutdown
             pass
         except Exception as e:
             self.logger.error(f"Heartbeat error: {e}")
+            # Trigger reconnection on heartbeat failure
+            if self._running and not self._reconnecting:
+                self._reconnect_task = asyncio.create_task(self._reconnect())
 
     async def _subdomain_heartbeat(self, subdomain: str) -> None:
         """Send periodic heartbeats for subdomain keep-alive"""
@@ -1033,10 +1094,18 @@ class HighPerformanceClient:
                         "Subdomain": subdomain,
                         "Timestamp": time.time(),
                     }
-                    await self._send_message(self.control_ws, heartbeat)
-                    self.logger.debug(
-                        f"Sent subdomain heartbeat for {subdomain}"
-                    )
+                    # Use try/except to handle race condition where connection
+                    # closes between the check and send
+                    try:
+                        await self._send_message(self.control_ws, heartbeat)
+                        self.logger.debug(
+                            f"Sent subdomain heartbeat for {subdomain}"
+                        )
+                    except (ConnectionResetError, BrokenPipeError, OSError):
+                        self.logger.warning(
+                            f"Connection lost during subdomain heartbeat for {subdomain}"
+                        )
+                        break
         except asyncio.CancelledError:
             # Normal shutdown
             pass
@@ -1045,6 +1114,8 @@ class HighPerformanceClient:
 
     async def _control_loop(self) -> None:
         """Listen for control messages"""
+        # Timeout slightly longer than server heartbeat (60s) to detect stale connections
+        receive_timeout = 45.0
         try:
             while (
                 self._running
@@ -1052,7 +1123,10 @@ class HighPerformanceClient:
                 and not self.control_ws.closed
             ):
                 try:
-                    msg = await self._receive_message(self.control_ws)
+                    msg = await asyncio.wait_for(
+                        self._receive_message(self.control_ws),
+                        timeout=receive_timeout,
+                    )
                     await self._handle_message(msg)
                 except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                     # Connection lost
@@ -1085,6 +1159,14 @@ class HighPerformanceClient:
     async def _reconnect(self) -> None:
         """Reconnect with exponential backoff"""
         self._reconnecting = True
+
+        # Clear all pending request futures to prevent ID collisions and hanging
+        # futures from the dead connection
+        for req_id, future in list(self.pending_requests.items()):
+            if not future.done():
+                future.cancel()
+        self.pending_requests.clear()
+        self.logger.debug("Cleared pending requests for reconnection")
 
         while self._running:
             try:

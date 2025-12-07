@@ -4,121 +4,63 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
+import sys
 from pathlib import Path
 from typing import Optional
 
-import typer
+import click
 import yaml
-from rich.align import Align
-from rich.columns import Columns
-from rich.console import Console, Group
-from rich.layout import Layout
-from rich.live import Live
-from rich.logging import RichHandler
-from rich.markdown import Markdown
-from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
-from rich.prompt import Prompt
-from rich.syntax import Syntax
-from rich.table import Table
-from rich.traceback import install
-from rich.tree import Tree
 
 from .. import __version__
 from ..core.config import AuthConfig, ClientConfig
 from .high_performance_model import HighPerformanceClient, TunnelConfig
 
-# Install rich traceback handler for better error display
-install(show_locals=False)
-
-app = typer.Typer(
-    name="retunnel",
-    help="ReTunnel - Enterprise-grade secure tunnel service for exposing local servers to the internet",
-    add_completion=True,
-    rich_markup_mode="rich",
-    pretty_exceptions_show_locals=False,
-)
-console = Console()
-
-# Define ReTunnel brand colors and styles
-RETUNNEL_THEME = {
-    "primary": "cyan",
-    "success": "green",
-    "warning": "yellow",
-    "error": "red",
-    "info": "blue",
-    "dim": "dim",
-}
-
-
-def display_error(error: Exception, title: str = "Error") -> None:
-    """Display error in a consistent, styled format."""
-    console.print(
-        Panel(
-            f"[{RETUNNEL_THEME['error']}]{error}[/{RETUNNEL_THEME['error']}]",
-            title=f"[bold {RETUNNEL_THEME['error']}]{title}[/bold {RETUNNEL_THEME['error']}]",
-            border_style=RETUNNEL_THEME["error"],
-            padding=(1, 2),
-        )
-    )
-
-
-def _format_bytes(num: int) -> str:
-    """Format bytes to human readable format"""
-    size = float(num)
-    for unit in ["B", "KB", "MB", "GB", "TB"]:
-        if abs(size) < 1024.0:
-            if unit == "B":
-                return f"{size:.0f}{unit}"
-            return f"{size:.1f}{unit}"
-        size /= 1024.0
-    return f"{size:.1f}PB"
-
 
 def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> None:
-    """Set up logging with rich handler."""
-    handlers = [
-        RichHandler(
-            console=console,
-            rich_tracebacks=True,
-            show_time=False,
-            show_path=False,
-        )
-    ]
+    """Set up logging with simple format."""
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
     if log_file:
         handlers.append(logging.FileHandler(log_file))
 
     logging.basicConfig(
         level=level,
-        format="%(message)s",
-        datefmt="[%X]",
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
         handlers=handlers,
     )
 
 
-@app.command()
+@click.group()
+@click.version_option(version=__version__, prog_name="retunnel")
+def cli() -> None:
+    """ReTunnel - Securely expose local servers to the internet."""
+    pass
+
+
+@cli.command()
+@click.argument("port", type=int)
+@click.option(
+    "-s", "--subdomain", default=None, help="Request specific subdomain"
+)
+@click.option("-h", "--hostname", default=None, help="Request specific hostname")
+@click.option("-a", "--auth", default=None, help="HTTP basic auth (user:pass)")
+@click.option("--server", default=None, help="ReTunnel server address")
+@click.option("--token", default=None, help="Authentication token")
+@click.option(
+    "--log-level", default="INFO", help="Logging level (DEBUG, INFO, WARNING)"
+)
 def http(
-    port: int = typer.Argument(..., help="Local port to expose"),
-    subdomain: Optional[str] = typer.Option(
-        None, "--subdomain", "-s", help="Request specific subdomain"
-    ),
-    hostname: Optional[str] = typer.Option(
-        None, "--hostname", "-h", help="Request specific hostname"
-    ),
-    auth: Optional[str] = typer.Option(
-        None, "--auth", "-a", help="HTTP basic auth (user:pass)"
-    ),
-    server: Optional[str] = typer.Option(
-        None, "--server", help="ReTunnel server address"
-    ),
-    token: Optional[str] = typer.Option(
-        None, "--token", help="Authentication token"
-    ),
-    log_level: str = typer.Option("INFO", "--log-level", help="Logging level"),
-    inspect: bool = typer.Option(True, "--inspect", help="Inspect requests"),
+    port: int,
+    subdomain: Optional[str],
+    hostname: Optional[str],
+    auth: Optional[str],
+    server: Optional[str],
+    token: Optional[str],
+    log_level: str,
 ) -> None:
     """Create an HTTP tunnel to expose a local port."""
-    setup_logging(log_level, log_file="nohup.out")
+    setup_logging(log_level)
 
     config = TunnelConfig(
         protocol="http",
@@ -126,25 +68,29 @@ def http(
         subdomain=subdomain,
         hostname=hostname,
         auth=auth,
-        inspect=inspect,
+        inspect=True,
     )
 
     asyncio.run(_run_tunnel(config, server, token))
 
 
-@app.command()
+@cli.command()
+@click.argument("port", type=int)
+@click.option(
+    "-r", "--remote-port", default=None, type=int,
+    help="Request specific remote port"
+)
+@click.option("--server", default=None, help="ReTunnel server address")
+@click.option("--token", default=None, help="Authentication token")
+@click.option(
+    "--log-level", default="INFO", help="Logging level (DEBUG, INFO, WARNING)"
+)
 def tcp(
-    port: int = typer.Argument(..., help="Local port to expose"),
-    remote_port: Optional[int] = typer.Option(
-        None, "--remote-port", "-r", help="Request specific remote port"
-    ),
-    server: Optional[str] = typer.Option(
-        None, "--server", help="ReTunnel server address"
-    ),
-    token: Optional[str] = typer.Option(
-        None, "--token", help="Authentication token"
-    ),
-    log_level: str = typer.Option("INFO", "--log-level", help="Logging level"),
+    port: int,
+    remote_port: Optional[int],
+    server: Optional[str],
+    token: Optional[str],
+    log_level: str,
 ) -> None:
     """Create a TCP tunnel to expose a local port."""
     setup_logging(log_level)
@@ -157,15 +103,16 @@ def tcp(
     asyncio.run(_run_tunnel(config, server, token))
 
 
-@app.command()
-def start(
-    config_path: Path = typer.Argument(
-        Path("retunnel.yml"),
-        help="Path to configuration file",
-        exists=True,
-    ),
-    log_level: str = typer.Option("INFO", "--log-level", help="Logging level"),
-) -> None:
+@cli.command()
+@click.argument(
+    "config_path",
+    type=click.Path(exists=True, path_type=Path),
+    default="retunnel.yml",
+)
+@click.option(
+    "--log-level", default="INFO", help="Logging level (DEBUG, INFO, WARNING)"
+)
+def start(config_path: Path, log_level: str) -> None:
     """Start tunnels from configuration file."""
     setup_logging(log_level)
 
@@ -173,71 +120,41 @@ def start(
         config = ClientConfig.from_yaml(config_path)
         asyncio.run(_run_from_config(config))
     except Exception as e:
-        display_error(e, "Configuration Error")
-        raise typer.Exit(1)
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
 
 
-@app.command()
-def authtoken(
-    token: Optional[str] = typer.Argument(
-        None, help="Authentication token to save"
-    ),
-) -> None:
+@cli.command()
+@click.argument("token", required=False)
+def authtoken(token: Optional[str]) -> None:
     """Save authentication token for future use."""
-    # Interactive prompt if token not provided
     if not token:
-        token = Prompt.ask(
-            f"[{RETUNNEL_THEME['primary']}]Enter authentication token[/{RETUNNEL_THEME['primary']}]",
-            password=True,
-        )
+        token = click.prompt("Enter authentication token", hide_input=True)
 
     if not token:
-        display_error(ValueError("Token cannot be empty"), "Invalid Token")
-        raise typer.Exit(1)
+        click.echo("Error: Token cannot be empty", err=True)
+        sys.exit(1)
 
     auth_config = AuthConfig()
     auth_config.auth_token = token
 
-    console.print(
-        Panel(
-            f"[{RETUNNEL_THEME['success']}]✓[/{RETUNNEL_THEME['success']}] Auth token saved successfully\n\n"
-            f"[{RETUNNEL_THEME['dim']}]Location: {auth_config.CONFIG_PATH}[/{RETUNNEL_THEME['dim']}]",
-            title="[bold]Token Saved[/bold]",
-            border_style=RETUNNEL_THEME["success"],
-        )
-    )
+    click.echo(f"Auth token saved to {auth_config.CONFIG_PATH}")
 
 
-@app.command()
-def config(
-    show: bool = typer.Option(
-        False, "--show", help="Show current configuration"
-    ),
-    example: bool = typer.Option(
-        False, "--example", help="Show example configuration"
-    ),
-) -> None:
+@cli.command()
+@click.option("--show", is_flag=True, help="Show current configuration")
+@click.option("--example", is_flag=True, help="Show example configuration")
+def config(show: bool, example: bool) -> None:
     """Manage ReTunnel configuration."""
     if show:
         auth_config = AuthConfig()
-        tree = Tree("[bold]ReTunnel Configuration[/bold]")
-
-        # Auth section
-        auth_branch = tree.add("[cyan]Authentication[/cyan]")
+        click.echo("ReTunnel Configuration:")
+        click.echo("-" * 40)
         if auth_config.auth_token:
-            auth_branch.add(
-                f"Token: [green]{auth_config.auth_token[:8]}...[/green]"
-            )
+            click.echo(f"  Token: {auth_config.auth_token[:8]}...")
         else:
-            auth_branch.add("[red]No auth token configured[/red]")
-
-        # Server section
-        server_branch = tree.add("[cyan]Server[/cyan]")
-        server_branch.add("Default: [blue]retunnel.net[/blue]")
-
-        console.print(
-            Panel(tree, title="Current Configuration", border_style="cyan")
-        )
+            click.echo("  Token: Not configured")
+        click.echo("  Server: retunnel.net (default)")
 
     elif example:
         example_config = {
@@ -267,176 +184,90 @@ def config(
             ],
         }
 
-        yaml_content = yaml.dump(example_config, default_flow_style=False)
-        syntax = Syntax(
-            yaml_content, "yaml", theme="monokai", line_numbers=True
-        )
-        console.print(
-            Panel(
-                syntax,
-                title="[bold]Example retunnel.yml[/bold]",
-                border_style=RETUNNEL_THEME["success"],
-                padding=(1, 2),
-            )
-        )
+        click.echo("# Example retunnel.yml")
+        click.echo(yaml.dump(example_config, default_flow_style=False))
 
     else:
-        console.print("Use --show to display config or --example for sample")
+        click.echo("Use --show to display config or --example for sample")
 
 
-@app.command()
-def help() -> None:
+@cli.command(name="help")
+def help_cmd() -> None:
     """Show detailed help information."""
     help_text = """
-# ReTunnel CLI Help
+ReTunnel CLI Help
+=================
 
-**ReTunnel** is a secure tunnel service for exposing local servers to the internet.
+ReTunnel is a secure tunnel service for exposing local servers to the internet.
 
-## Quick Start
+Quick Start
+-----------
+  # Expose HTTP server on port 8080
+  retunnel http 8080
 
-```bash
-# Expose HTTP server on port 8080
-retunnel http 8080
+  # Expose with custom subdomain
+  retunnel http 8080 --subdomain myapp
 
-# Expose with custom subdomain
-retunnel http 8080 --subdomain myapp
+  # Expose TCP service
+  retunnel tcp 22
 
-# Expose TCP service
-retunnel tcp 22
-```
+Commands
+--------
+  retunnel http <port>       Create an HTTP tunnel
+    --subdomain, -s          Request specific subdomain
+    --hostname, -h           Request specific hostname
+    --auth, -a               HTTP basic auth (user:pass)
+    --server                 Custom server address
+    --token                  Authentication token
 
-## Features
+  retunnel tcp <port>        Create a TCP tunnel
+    --remote-port, -r        Request specific remote port
+    --server                 Custom server address
+    --token                  Authentication token
 
-- 🚀 **Fast** - High-performance WebSocket connections
-- 🔒 **Secure** - TLS encryption and authentication
-- 🌍 **Global** - Multiple regions available
-- 📊 **Real-time Stats** - Live traffic monitoring
-- 🎨 **Beautiful CLI** - Rich terminal interface
+  retunnel start [config]    Start tunnels from config file
+  retunnel authtoken [token] Save authentication token
+  retunnel config            Manage configuration
+    --show                   Display current configuration
+    --example                Show example config file
 
-## Commands
+  retunnel version           Display version information
 
-### `retunnel http <port>`
-Create an HTTP tunnel to expose a local web server.
+Environment Variables
+---------------------
+  RETUNNEL_SERVER_ENDPOINT   Override default server
+  RETUNNEL_AUTH_TOKEN        Set authentication token
 
-**Options:**
-- `--subdomain` / `-s`: Request specific subdomain
-- `--hostname` / `-h`: Request specific hostname
-- `--auth` / `-a`: HTTP basic auth (user:pass)
-- `--server`: Custom server address
-- `--token`: Authentication token
-
-### `retunnel tcp <port>`
-Create a TCP tunnel to expose any TCP service.
-
-**Options:**
-- `--remote-port` / `-r`: Request specific remote port
-- `--server`: Custom server address
-- `--token`: Authentication token
-
-### `retunnel start [config.yml]`
-Start tunnels from a configuration file.
-
-### `retunnel authtoken <token>`
-Save authentication token for future use.
-
-### `retunnel config`
-Manage configuration settings.
-
-**Options:**
-- `--show`: Display current configuration
-- `--example`: Show example config file
-
-### `retunnel version`
-Display version information.
-
-### `retunnel credits`
-Show open source credits.
-
-## Configuration File
-
-Create a `retunnel.yml` file:
-
-```yaml
-server_addr: retunnel.net
-auth_token: your-token-here
-tunnels:
-  - name: web
-    protocol: http
-    local_port: 8080
-    subdomain: myapp
-  - name: api
-    protocol: http
-    local_port: 3000
-    auth: user:pass
-```
-
-Then run: `retunnel start`
-
-## Environment Variables
-
-- `RETUNNEL_SERVER_ENDPOINT`: Override default server
-- `RETUNNEL_AUTH_TOKEN`: Set authentication token
-
-## Support
-
-- GitHub: https://github.com/retunnel/retunnel
-- Documentation: https://docs.retunnel.com
-- Email: support@retunnel.com
+Support
+-------
+  GitHub: https://github.com/retunnel/retunnel
+  Documentation: https://docs.retunnel.com
 """
+    click.echo(help_text)
 
-    console.print(Markdown(help_text))
 
-
-@app.command()
+@cli.command()
 def version() -> None:
     """Show ReTunnel version."""
-    version_panel = Panel(
-        Align.center(
-            Group(
-                f"[bold {RETUNNEL_THEME['primary']}]ReTunnel[/bold {RETUNNEL_THEME['primary']}]",
-                f"[{RETUNNEL_THEME['dim']}]Version {__version__}[/{RETUNNEL_THEME['dim']}]",
-                "",
-                f"[{RETUNNEL_THEME['dim']}]© 2024 ReTunnel Team[/{RETUNNEL_THEME['dim']}]",
-            ),
-            vertical="middle",
-        ),
-        border_style=RETUNNEL_THEME["primary"],
-        padding=(1, 20),
-    )
-    console.print(version_panel)
+    click.echo(f"ReTunnel v{__version__}")
 
 
-@app.command()
+@cli.command()
 def credits() -> None:
     """Show open source credits."""
-    console.print("\n[bold cyan]Open Source Credits[/bold cyan]\n")
-
-    table = Table(
-        show_header=True,
-        header_style="bold cyan",
-        border_style="dim",
-        show_edge=False,
-        pad_edge=False,
-        box=None,
-    )
-    table.add_column("Package", style="cyan")
-    table.add_column("License", style="green")
-    table.add_column("Description")
-
+    click.echo("Open Source Credits")
+    click.echo("=" * 40)
     credits_data = [
         ("aiohttp", "Apache-2.0", "Async HTTP client/server"),
         ("msgpack", "Apache-2.0", "Binary serialization"),
-        ("typer", "MIT", "CLI framework"),
-        ("rich", "MIT", "Terminal formatting"),
+        ("click", "BSD-3-Clause", "CLI framework"),
         ("pydantic", "MIT", "Data validation"),
         ("pyyaml", "MIT", "YAML parser"),
     ]
-
-    for package, license, desc in credits_data:
-        table.add_row(package, license, desc)
-
-    console.print(table)
-    console.print("\n[dim italic]Thank you to all contributors[/dim italic]\n")
+    for package, license_name, desc in credits_data:
+        click.echo(f"  {package:<15} {license_name:<12} {desc}")
+    click.echo()
+    click.echo("Thank you to all contributors!")
 
 
 async def _run_tunnel(
@@ -445,423 +276,141 @@ async def _run_tunnel(
     token: Optional[str] = None,
 ) -> None:
     """Run a single tunnel."""
-    # Suppress client logging to preserve Rich output
-    import logging as _logging
+    logger = logging.getLogger("retunnel")
 
-    _logging.getLogger("client").setLevel(_logging.ERROR)
-    _logging.getLogger("retunnel").setLevel(_logging.ERROR)
-    _logging.getLogger("aiohttp").setLevel(_logging.ERROR)
-    _logging.getLogger("asyncio").setLevel(_logging.ERROR)
-
-    # Disable the default KeyboardInterrupt traceback
-    import sys
-
-    sys.tracebacklimit = 0
-
-    # Create client (server defaults to RETUNNEL_SERVER_ENDPOINT or localhost:6400)
+    # Create client
     client = HighPerformanceClient(server, auth_token=token)
 
-    # Simple output for non-interactive terminals
-    is_tty = sys.stdout.isatty()
+    # Handle shutdown gracefully
+    shutdown_event = asyncio.Event()
 
-    try:
-        # Clean header
-        if is_tty:
-            console.clear()
+    def signal_handler() -> None:
+        shutdown_event.set()
 
-        # Display welcome banner
-        welcome_panel = Panel(
-            Align.center(
-                Group(
-                    f"[bold {RETUNNEL_THEME['primary']}]ReTunnel[/bold {RETUNNEL_THEME['primary']}]",
-                    f"[{RETUNNEL_THEME['dim']}]Secure Tunnel Service v{__version__}[/{RETUNNEL_THEME['dim']}]",
-                ),
-                vertical="middle",
-            ),
-            border_style=RETUNNEL_THEME["primary"],
-            padding=(1, 10),
-        )
-        console.print(welcome_panel)
-        console.print()
-
-        # Connection with status
-        with console.status(
-            f"[{RETUNNEL_THEME['primary']}]Establishing secure connection...[/{RETUNNEL_THEME['primary']}]",
-            spinner="dots2",
-        ) as status:
-            await client.connect()
-            status.update(
-                f"[{RETUNNEL_THEME['success']}]✓ Connected to tunnel service[/{RETUNNEL_THEME['success']}]"
-            )
-            await asyncio.sleep(0.5)
-
-        # Request tunnel with status
-        with console.status(
-            f"[{RETUNNEL_THEME['primary']}]Creating {config.protocol.upper()} tunnel...[/{RETUNNEL_THEME['primary']}]",
-            spinner="dots2",
-        ) as status:
-            tunnel = await client.request_tunnel(config)
-            status.update(
-                f"[{RETUNNEL_THEME['success']}]✓ Tunnel created successfully[/{RETUNNEL_THEME['success']}]"
-            )
-            await asyncio.sleep(0.5)
-
-        # Create tunnel info table
-        tunnel_table = Table(show_header=False, box=None, padding=(0, 2))
-        tunnel_table.add_column(style=f"{RETUNNEL_THEME['dim']}")
-        tunnel_table.add_column(style="bold")
-
-        tunnel_table.add_row(
-            "URL",
-            f"[bold {RETUNNEL_THEME['success']}]{tunnel.url}[/bold {RETUNNEL_THEME['success']}]",
-        )
-        tunnel_table.add_row("Protocol", tunnel.protocol.upper())
-        tunnel_table.add_row("Local Port", str(tunnel.config.local_port))
-        # Initial status
-        status_text = f"[{RETUNNEL_THEME['success']}]● Active[/{RETUNNEL_THEME['success']}]"
-        tunnel_table.add_row("Status", status_text)
-
-        # Add auth token display (last 4 characters)
-        if client.auth_token:
-            token_display = f"****{client.auth_token[-4:]}"
-        else:
-            token_display = "None"
-        tunnel_table.add_row(
-            "Token",
-            f"[{RETUNNEL_THEME['dim']}]{token_display}[/{RETUNNEL_THEME['dim']}]",
-        )
-
-        tunnel_panel = Panel(
-            tunnel_table,
-            title="[bold]Tunnel Details[/bold]",
-            border_style=RETUNNEL_THEME["success"],
-            padding=(1, 2),
-        )
-
-        # Create layout for tunnel info and traffic stats
-        layout = Layout()
-        if config.inspect:
-            layout.split_column(
-                Layout(name="main", ratio=2),
-                Layout(name="inspector", ratio=1),
-            )
-            layout["main"].split_row(
-                Layout(tunnel_panel, name="info", ratio=2),
-                Layout(name="stats", ratio=1),
-            )
-
-            # Create inspector table
-            inspector_table = Table(
-                show_header=True,
-                header_style="bold magenta",
-                box=None,
-                padding=(0, 1),
-            )
-            inspector_table.add_column("Method")
-            inspector_table.add_column("Path")
-            inspector_table.add_column("Status")
-            inspector_table.add_column("Time")
-
-            inspector_panel = Panel(
-                inspector_table,
-                title="[bold]Request Inspector[/bold]",
-                border_style=RETUNNEL_THEME["primary"],
-            )
-            layout["inspector"].update(inspector_panel)
-
-        else:
-            layout.split_column(
-                Layout(tunnel_panel, name="info", size=8),
-                Layout(name="stats", size=3),
-            )
-
-
-        # Initial stats panel
-        initial_stats = Panel(
-            Align.center(
-                Columns(
-                    [
-                        f"[{RETUNNEL_THEME['primary']}]↑ Upload[/{RETUNNEL_THEME['primary']}] 0B",
-                        f"[{RETUNNEL_THEME['primary']}]↓ Download[/{RETUNNEL_THEME['primary']}] 0B",
-                        f"[{RETUNNEL_THEME['dim']}]Uptime 0m 0s[/{RETUNNEL_THEME['dim']}]",
-                    ],
-                    expand=True,
-                    align="center",
-                ),
-                vertical="middle",
-            ),
-            title="[bold]Traffic[/bold]",
-            border_style=RETUNNEL_THEME["info"],
-        )
-        layout["stats"].update(initial_stats)
-
-        # Initial display
-        console.print(layout)
-        console.print(
-            f"\n[{RETUNNEL_THEME['dim']}]Press Ctrl+C to stop[/{RETUNNEL_THEME['dim']}]\n"
-        )
-
-        # Keep running and show stats using Live
+    loop = asyncio.get_event_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            if is_tty:
-                with Live(
-                    layout, console=console, refresh_per_second=2, transient=False
-                ) as live:
-                    while True:
-                        # Update connection status
-                        if client.is_connected:
-                            status_text = f"[{RETUNNEL_THEME['success']}]● Active[/{RETUNNEL_THEME['success']}]"
-                        elif client._reconnecting:
-                            status_text = f"[{RETUNNEL_THEME['warning']}]⟳ {client.connection_status}[/{RETUNNEL_THEME['warning']}]"
-                        else:
-                            status_text = f"[{RETUNNEL_THEME['error']}]● {client.connection_status}[/{RETUNNEL_THEME['error']}]"
-
-                        # Rebuild tunnel table with updated status
-                        tunnel_table = Table(
-                            show_header=False, box=None, padding=(0, 2)
-                        )
-                        tunnel_table.add_column(style=f"{RETUNNEL_THEME['dim']}")
-                        tunnel_table.add_column(style="bold")
-
-                        tunnel_table.add_row(
-                            "URL",
-                            f"[bold {RETUNNEL_THEME['success']}]{tunnel.url}[/bold {RETUNNEL_THEME['success']}]",
-                        )
-                        tunnel_table.add_row("Protocol", tunnel.protocol.upper())
-                        tunnel_table.add_row(
-                            "Local Port", str(tunnel.config.local_port)
-                        )
-                        tunnel_table.add_row("Status", status_text)
-
-                        # Add auth token display (last 4 characters)
-                        if client.auth_token:
-                            token_display = f"****{client.auth_token[-4:]}"
-                        else:
-                            token_display = "None"
-                        tunnel_table.add_row(
-                            "Token",
-                            f"[{RETUNNEL_THEME['dim']}]{token_display}[/{RETUNNEL_THEME['dim']}]",
-                        )
-
-                        tunnel_panel = Panel(
-                            tunnel_table,
-                            title="[bold]Tunnel Details[/bold]",
-                            border_style=(
-                                RETUNNEL_THEME["success"]
-                                if client.is_connected
-                                else RETUNNEL_THEME["warning"]
-                            ),
-                            padding=(1, 2),
-                        )
-
-                        layout["info"].update(tunnel_panel)
-
-                        # Update traffic stats
-                        stats = tunnel.get_stats()
-                        in_bytes = _format_bytes(stats["bytes_in"])
-                        out_bytes = _format_bytes(stats["bytes_out"])
-                        uptime = int(stats.get("uptime", 0))
-                        uptime_str = f"{uptime // 60}m {uptime % 60}s"
-
-                        # Create traffic stats panel
-                        stats_content = Columns(
-                            [
-                                f"[{RETUNNEL_THEME['primary']}]↑ Upload[/{RETUNNEL_THEME['primary']}] {in_bytes}",
-                                f"[{RETUNNEL_THEME['primary']}]↓ Download[/{RETUNNEL_THEME['primary']}] {out_bytes}",
-                                f"[{RETUNNEL_THEME['dim']}]Uptime {uptime_str}[/{RETUNNEL_THEME['dim']}]",
-                            ],
-                            expand=True,
-                            align="center",
-                        )
-
-                        stats_panel = Panel(
-                            Align.center(stats_content, vertical="middle"),
-                            title="[bold]Traffic[/bold]",
-                            border_style=RETUNNEL_THEME["info"],
-                        )
-
-                        layout["stats"].update(stats_panel)
-
-                        # Update inspector
-                        if config.inspect:
-                            requests = client.get_requests()
-                            for req in requests:
-                                logging.info(
-                                    f"[Request] {req.method} {req.path} - {req.status}"
-                                )
-
-                        await asyncio.sleep(1)
-            else:
-                # Non-interactive mode
-                console.print(f"Tunnel URL: {tunnel.url}")
-                while True:
-                    requests = client.get_requests()
-                    for req in requests:
-                        logging.info(
-                            f"[Request] {req.method} {req.path} - {req.status}"
-                        )
-                    await asyncio.sleep(1)
-        except KeyboardInterrupt:
+            loop.add_signal_handler(sig, signal_handler)
+        except NotImplementedError:
+            # Windows doesn't support add_signal_handler
             pass
 
-    except KeyboardInterrupt:
-        # Move to a clean line and show shutdown message
-        console.print()
-        with console.status(
-            f"[{RETUNNEL_THEME['warning']}]Shutting down tunnel...[/{RETUNNEL_THEME['warning']}]",
-            spinner="dots2",
-        ):
-            await client.close()
-            await asyncio.sleep(0.5)
+    try:
+        # Connect
+        click.echo("Connecting to ReTunnel server...")
+        await client.connect()
 
-        console.print(
-            Panel(
-                f"[{RETUNNEL_THEME['success']}]✓ Tunnel closed successfully[/{RETUNNEL_THEME['success']}]",
-                border_style=RETUNNEL_THEME["success"],
-                padding=(0, 2),
-            )
-        )
+        # Request tunnel
+        click.echo(f"Creating {config.protocol.upper()} tunnel...")
+        tunnel = await client.request_tunnel(config)
+
+        # Output the URL - this is the main output
+        click.echo("")
+        click.echo(f"Tunnel URL: {tunnel.url}")
+        click.echo(f"Forwarding to localhost:{config.local_port}")
+        click.echo("")
+        click.echo("Press Ctrl+C to stop")
+        click.echo("-" * 40)
+
+        # Wait for requests and log them
+        while not shutdown_event.is_set():
+            try:
+                # Check for incoming requests
+                requests = client.get_requests()
+                for req in requests:
+                    logger.info(f"{req.method} {req.path} -> {req.status}")
+
+                # Check connection status
+                if not client.is_connected and not client._reconnecting:
+                    logger.warning("Connection lost")
+
+                await asyncio.sleep(0.5)
+            except asyncio.CancelledError:
+                break
+
+    except KeyboardInterrupt:
+        pass
     except Exception as e:
-        console.print()
-        display_error(e, "Connection Error")
-        raise typer.Exit(1)
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
     finally:
-        # Ensure client is closed
-        if "client" in locals():
-            await client.close()
-        # Give asyncio time to clean up
-        await asyncio.sleep(0.1)
+        click.echo("\nShutting down...")
+        await client.close()
+        click.echo("Tunnel closed.")
 
 
 async def _run_from_config(config: ClientConfig) -> None:
     """Run tunnels from configuration."""
+    logger = logging.getLogger("retunnel")
+
     # Create client
     client = HighPerformanceClient(
         config.server_addr,
         auth_token=config.auth_token,
     )
 
+    # Handle shutdown gracefully
+    shutdown_event = asyncio.Event()
+
+    def signal_handler() -> None:
+        shutdown_event.set()
+
+    loop = asyncio.get_event_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, signal_handler)
+        except NotImplementedError:
+            pass
+
     try:
-        # Connect with status
-        with console.status(
-            f"[{RETUNNEL_THEME['primary']}]Connecting to {config.server_addr}...[/{RETUNNEL_THEME['primary']}]",
-            spinner="dots2",
-        ) as status:
-            await client.connect()
-            status.update(
-                f"[{RETUNNEL_THEME['success']}]✓ Connected successfully[/{RETUNNEL_THEME['success']}]"
-            )
-            await asyncio.sleep(0.5)
+        # Connect
+        click.echo(f"Connecting to {config.server_addr}...")
+        await client.connect()
 
-        # Start all tunnels with progress
+        # Start all tunnels
         tunnels = []
-        with Progress(
-            SpinnerColumn(
-                spinner_name="dots2", style=RETUNNEL_THEME["primary"]
-            ),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
+        for tunnel_def in config.tunnels:
+            click.echo(f"Starting tunnel '{tunnel_def.name}'...")
 
-            task_id = progress.add_task(
-                f"[{RETUNNEL_THEME['primary']}]Starting tunnels...[/{RETUNNEL_THEME['primary']}]",
-                total=len(config.tunnels),
+            tunnel_config = TunnelConfig(
+                protocol=tunnel_def.protocol,
+                local_port=tunnel_def.local_port,
+                subdomain=tunnel_def.subdomain,
+                hostname=tunnel_def.hostname,
+                auth=tunnel_def.auth,
+                inspect=tunnel_def.inspect,
             )
 
-            for tunnel_def in config.tunnels:
-                progress.update(
-                    task_id,
-                    description=f"[{RETUNNEL_THEME['primary']}]Starting '{tunnel_def.name}'...[/{RETUNNEL_THEME['primary']}]",
-                )
+            tunnel = await client.request_tunnel(tunnel_config)
+            tunnels.append((tunnel_def.name, tunnel))
 
-                tunnel_config = TunnelConfig(
-                    protocol=tunnel_def.protocol,
-                    local_port=tunnel_def.local_port,
-                    subdomain=tunnel_def.subdomain,
-                    hostname=tunnel_def.hostname,
-                    auth=tunnel_def.auth,
-                    inspect=tunnel_def.inspect,
-                )
-
-                tunnel = await client.request_tunnel(tunnel_config)
-                tunnels.append((tunnel_def.name, tunnel))
-                progress.advance(task_id)
-
-            progress.update(
-                task_id,
-                description=f"[{RETUNNEL_THEME['success']}]✓ All tunnels started[/{RETUNNEL_THEME['success']}]",
-            )
-
-        # Display summary using Tree
-        console.print()
-        tree = Tree(
-            f"[bold]Active Tunnels[/bold] ({len(tunnels)} total)",
-            guide_style=RETUNNEL_THEME["dim"],
-        )
-
+        # Display summary
+        click.echo("")
+        click.echo(f"Active Tunnels ({len(tunnels)} total):")
+        click.echo("-" * 40)
         for name, tunnel in tunnels:
-            branch = tree.add(
-                f"[{RETUNNEL_THEME['primary']}]{name}[/{RETUNNEL_THEME['primary']}]"
-            )
-            branch.add(
-                f"[{RETUNNEL_THEME['success']}]{tunnel.url}[/{RETUNNEL_THEME['success']}]"
-            )
-            branch.add(
-                f"[{RETUNNEL_THEME['dim']}]Local port: {tunnel.config.local_port}[/{RETUNNEL_THEME['dim']}]"
-            )
-            if tunnel.protocol == "http":
-                branch.add(
-                    f"[{RETUNNEL_THEME['dim']}]Protocol: HTTP/HTTPS[/{RETUNNEL_THEME['dim']}]"
-                )
-            else:
-                branch.add(
-                    f"[{RETUNNEL_THEME['dim']}]Protocol: {tunnel.protocol.upper()}[/{RETUNNEL_THEME['dim']}]"
-                )
+            click.echo(f"  {name}: {tunnel.url}")
+            click.echo(f"    -> localhost:{tunnel.config.local_port}")
+        click.echo("")
+        click.echo("Press Ctrl+C to stop all tunnels")
 
-        console.print(
-            Panel(
-                tree,
-                border_style=RETUNNEL_THEME["success"],
-                padding=(1, 2),
-            )
-        )
-
-        console.print(
-            f"\n[{RETUNNEL_THEME['dim']}]Press Ctrl+C to stop all tunnels...[/{RETUNNEL_THEME['dim']}]"
-        )
-
-        # Keep running
-        await asyncio.Event().wait()
+        # Wait for shutdown
+        while not shutdown_event.is_set():
+            try:
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                break
 
     except KeyboardInterrupt:
-        console.print()
-        with console.status(
-            f"[{RETUNNEL_THEME['warning']}]Shutting down all tunnels...[/{RETUNNEL_THEME['warning']}]",
-            spinner="dots2",
-        ):
-            await client.close()
-            await asyncio.sleep(0.5)
-
-        console.print(
-            Panel(
-                f"[{RETUNNEL_THEME['success']}]✓ All tunnels closed successfully[/{RETUNNEL_THEME['success']}]",
-                border_style=RETUNNEL_THEME["success"],
-                padding=(0, 2),
-            )
-        )
+        pass
     except Exception as e:
-        console.print()
-        display_error(e, "Configuration Error")
-        raise typer.Exit(1)
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
     finally:
-        if "client" in locals():
-            await client.close()
-
-
-def main() -> None:
-    """Main entry point."""
-    app()
+        click.echo("\nShutting down all tunnels...")
+        await client.close()
+        click.echo("All tunnels closed.")
 
 
 if __name__ == "__main__":
-    main()
+    cli()

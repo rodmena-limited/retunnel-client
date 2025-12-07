@@ -623,8 +623,7 @@ class TestClientModule:
         """Test importing CLI module."""
         from retunnel.client import cli
 
-        assert hasattr(cli, "app")
-        assert hasattr(cli, "main")
+        assert hasattr(cli, "cli")  # click group
 
 
 class TestConnectionModule:
