@@ -21,21 +21,30 @@ class APIError(Exception):
 class ReTunnelAPIClient:
     """Client for ReTunnel API interactions"""
 
-    def __init__(self, api_url: str = "https://api.retunnel.net"):
+    def __init__(
+        self,
+        api_url: str = "https://api.retunnel.net",
+        ssl_verify: bool = True,
+    ):
         """Initialize API client
 
         Args:
             api_url: Base URL for API endpoints
+            ssl_verify: Whether to verify SSL certificates (default: True)
         """
         self.api_url = api_url.rstrip("/")
+        self.ssl_verify = ssl_verify
         self._session: Optional[ClientSession] = None
 
     async def __aenter__(self) -> "ReTunnelAPIClient":
         """Async context manager entry"""
         # Add timeout for all requests (2 seconds)
         timeout = aiohttp.ClientTimeout(total=2)
-        # Disable SSL verification for development/self-signed certificates
-        connector = aiohttp.TCPConnector(ssl=False)
+        # Use SSL verification setting (#27)
+        # For localhost, always disable SSL verification
+        is_localhost = "localhost" in self.api_url or "127.0.0.1" in self.api_url
+        ssl_context = False if is_localhost else self.ssl_verify
+        connector = aiohttp.TCPConnector(ssl=ssl_context)
         self._session = ClientSession(timeout=timeout, connector=connector)
         return self
 

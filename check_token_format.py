@@ -3,7 +3,6 @@
 
 import asyncio
 import aiohttp
-import sys
 
 async def check_token():
     """Check if the token is hashed in the database"""

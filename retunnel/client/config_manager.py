@@ -22,11 +22,20 @@ class ClientConfig:
     auth_token: Optional[str] = None
     server_url: str = "wss://retunnel.net"  # WebSocket endpoint for tunnels
     api_url: str = "https://retunnel.net"  # REST API endpoint
+    ssl_verify: bool = True  # Verify SSL certificates by default (#27)
+    max_message_size: int = 10 * 1024 * 1024  # 10MB default (#29)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ClientConfig":
         """Create config from dictionary"""
-        return cls(**data)
+        # Handle missing fields for backward compatibility
+        return cls(
+            auth_token=data.get("auth_token"),
+            server_url=data.get("server_url", "wss://retunnel.net"),
+            api_url=data.get("api_url", "https://retunnel.net"),
+            ssl_verify=data.get("ssl_verify", True),
+            max_message_size=data.get("max_message_size", 10 * 1024 * 1024),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Convert config to dictionary"""
@@ -34,6 +43,8 @@ class ClientConfig:
             "auth_token": self.auth_token,
             "server_url": self.server_url,
             "api_url": self.api_url,
+            "ssl_verify": self.ssl_verify,
+            "max_message_size": self.max_message_size,
         }
 
 
@@ -134,6 +145,28 @@ class ConfigManager:
         """Set API URL"""
         config = await self.load()
         config.api_url = url
+        await self.save()
+
+    async def get_ssl_verify(self) -> bool:
+        """Get SSL verification setting"""
+        config = await self.load()
+        return config.ssl_verify
+
+    async def set_ssl_verify(self, verify: bool) -> None:
+        """Set SSL verification setting"""
+        config = await self.load()
+        config.ssl_verify = verify
+        await self.save()
+
+    async def get_max_message_size(self) -> int:
+        """Get maximum message size in bytes"""
+        config = await self.load()
+        return config.max_message_size
+
+    async def set_max_message_size(self, size: int) -> None:
+        """Set maximum message size in bytes"""
+        config = await self.load()
+        config.max_message_size = size
         await self.save()
 
 

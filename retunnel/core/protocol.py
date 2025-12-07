@@ -5,7 +5,7 @@ Message definitions for retunnel protocol
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-import msgpack  # type: ignore[import-untyped]
+import msgpack
 
 
 @dataclass
@@ -88,6 +88,7 @@ class StartProxy(Message):
     Type: str = field(default="StartProxy", init=False)
     Url: str = ""
     ClientAddr: str = ""
+    RequestId: str = ""  # Correlation ID for request tracing (#30)
 
 
 @dataclass

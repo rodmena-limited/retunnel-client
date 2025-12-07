@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Test script for redirect handling"""
 
-from flask import Flask, redirect, url_for
+from flask import Flask, redirect
 import sys
 
 app = Flask(__name__)

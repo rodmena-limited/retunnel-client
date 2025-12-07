@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional, Set, List
 from urllib.parse import urlparse, urlunparse
 
 import aiohttp
-import msgpack  # type: ignore[import-untyped]
+import msgpack
 
 from ..utils.id import generate_client_id, generate_request_id
 from .api_client import APIError, ReTunnelAPIClient
@@ -86,9 +86,13 @@ class HighPerformanceClient:
         self,
         server_addr: Optional[str] = None,
         auth_token: Optional[str] = None,
+        ssl_verify: bool = True,
+        max_message_size: int = 10 * 1024 * 1024,
     ) -> None:
         self.server_addr = server_addr
         self.auth_token = auth_token
+        self.ssl_verify = ssl_verify
+        self.max_message_size = max_message_size
         self.client_id = generate_client_id()
 
         # WebSocket connections
@@ -103,7 +107,7 @@ class HighPerformanceClient:
         self.is_connected = False
         self.connection_status = "Disconnected"
         self._reconnect_delay = 1.0  # Start with 1 second
-        self._max_reconnect_delay = 16.0
+        self._max_reconnect_delay = 60.0  # Max 60 seconds as per ticket #26
         self._reconnecting = False
         self._running = True
         self.requests: asyncio.Queue[Request] = asyncio.Queue(maxsize=100)
@@ -124,6 +128,11 @@ class HighPerformanceClient:
         self._reconnect_task: Optional[asyncio.Task[Any]] = None
 
         self.logger = logging.getLogger(f"client.{self.client_id}")
+
+    @property
+    def is_reconnecting(self) -> bool:
+        """Check if client is currently attempting to reconnect."""
+        return self._reconnecting
 
     def get_requests(self) -> List[Request]:
         """Get all requests from the queue"""
@@ -151,7 +160,7 @@ class HighPerformanceClient:
             if self.server_addr and "localhost" in self.server_addr:
                 api_url = f"http://{self.server_addr}"
 
-            async with ReTunnelAPIClient(api_url) as api:
+            async with ReTunnelAPIClient(api_url, ssl_verify=self.ssl_verify) as api:
                 try:
                     result = await api.register_user()
                     self.auth_token = result.get("auth_token")
@@ -185,7 +194,7 @@ class HighPerformanceClient:
             if self.server_addr and "localhost" in self.server_addr:
                 api_url = f"http://{self.server_addr}"
 
-            async with ReTunnelAPIClient(api_url) as api:
+            async with ReTunnelAPIClient(api_url, ssl_verify=self.ssl_verify) as api:
                 try:
                     # Check if token is valid
                     if not await api.verify_token(self.auth_token):
@@ -245,8 +254,13 @@ class HighPerformanceClient:
 
         # Create session with proper timeout and SSL settings
         timeout = aiohttp.ClientTimeout(total=60)
-        # Disable SSL verification for development/self-signed certificates
-        ssl_context = False  # This disables SSL verification
+        # Use SSL verification setting from config (#27)
+        # For localhost/127.0.0.1, always disable SSL verification
+        is_localhost = (
+            self.server_addr
+            and ("localhost" in self.server_addr or "127.0.0.1" in self.server_addr)
+        )
+        ssl_context = False if is_localhost else self.ssl_verify
         connector = aiohttp.TCPConnector(
             limit=100, limit_per_host=10, ssl=ssl_context
         )
@@ -316,7 +330,7 @@ class HighPerformanceClient:
                 if self.server_addr and "localhost" in self.server_addr:
                     api_url = f"http://{self.server_addr}"
 
-                async with ReTunnelAPIClient(api_url) as api:
+                async with ReTunnelAPIClient(api_url, ssl_verify=self.ssl_verify) as api:
                     try:
                         # First try to reactivate the existing token
                         if old_token:
@@ -618,6 +632,8 @@ class HighPerformanceClient:
         local_writer = None
         conn_id = generate_request_id()
         self.proxy_connections[conn_id] = proxy_ws
+        # Initialize request_id for tracing - will be set by StartProxy (#30)
+        proxy_request_id: str = ""
 
         try:
             while not proxy_ws.closed:
@@ -627,6 +643,8 @@ class HighPerformanceClient:
                 if msg_type == "StartProxy":
                     # Extract URL to determine which tunnel
                     url = msg.get("Url", "")
+                    # Extract RequestId from StartProxy message (#30)
+                    proxy_request_id = msg.get("RequestId", "") or generate_request_id()
 
                     # Find matching tunnel
                     tunnel = None
@@ -636,18 +654,18 @@ class HighPerformanceClient:
                             break
 
                     if not tunnel:
-                        self.logger.error(f"No tunnel found for URL: {url}")
+                        self.logger.error(f"[{proxy_request_id}] No tunnel found for URL: {url}")
                         self.logger.error(
-                            f"Available tunnels: {list(self.tunnels.keys())}"
+                            f"[{proxy_request_id}] Available tunnels: {list(self.tunnels.keys())}"
                         )
                         for tid, t in self.tunnels.items():
                             self.logger.error(
-                                f"  Tunnel {tid}: tunnel_id={t.tunnel_id}, url={t.url}"
+                                f"[{proxy_request_id}]   Tunnel {tid}: tunnel_id={t.tunnel_id}, url={t.url}"
                             )
                         break
                     else:
                         self.logger.info(
-                            f"Found tunnel for URL {url}: tunnel_id={tunnel.tunnel_id}, tunnel.url={tunnel.url}"
+                            f"[{proxy_request_id}] Found tunnel for URL {url}: tunnel_id={tunnel.tunnel_id}"
                         )
 
                     # Connect to local service
@@ -670,8 +688,21 @@ class HighPerformanceClient:
                             headers = http_req.get("headers", {})
                             body = http_req.get("body", b"")
 
+                            # Use request_id from StartProxy message (#30)
+                            # Fall back to header or generate new if not available
+                            request_id = proxy_request_id
+                            if not request_id:
+                                for key, value in headers.items():
+                                    if key.lower() == "x-request-id":
+                                        request_id = value
+                                        break
+                            if not request_id:
+                                request_id = generate_request_id()
+                            # Ensure X-Request-ID header is set
+                            headers["X-Request-ID"] = request_id
+
                             self.logger.info(
-                                f"Incoming request: {method} {path}{'?' + query if query else ''}"
+                                f"[{request_id}] {method} {path}{'?' + query if query else ''}"
                             )
 
                             # Build request line
@@ -807,12 +838,11 @@ class HighPerformanceClient:
                                         while (
                                             len(response_body)
                                             < expected_length
+                                            and local_reader is not None
                                         ):
-                                            chunk = (
-                                                await asyncio.wait_for(
-                                                    local_reader.read(8192) if local_reader else asyncio.sleep(0),
-                                                    timeout=5.0
-                                                )
+                                            chunk = await asyncio.wait_for(
+                                                local_reader.read(8192),
+                                                timeout=5.0
                                             )
                                             if not chunk:
                                                 break
@@ -821,10 +851,10 @@ class HighPerformanceClient:
                                     elif is_chunked:
                                         # Handle chunked transfer encoding
                                         # Read chunks until we see "0\r\n\r\n" terminator
-                                        while True:
+                                        while local_reader is not None:
                                             # Read chunk size line
                                             chunk = await asyncio.wait_for(
-                                                local_reader.read(8192) if local_reader else asyncio.sleep(0),
+                                                local_reader.read(8192),
                                                 timeout=5.0
                                             )
                                             if not chunk:
@@ -839,9 +869,9 @@ class HighPerformanceClient:
                                         # For HTTP/1.1, this means read until timeout or a small delay with no data
                                         # Use a timeout-based approach
                                         try:
-                                            while True:
+                                            while local_reader is not None:
                                                 chunk = await asyncio.wait_for(
-                                                    local_reader.read(8192) if local_reader else asyncio.sleep(0),
+                                                    local_reader.read(8192),
                                                     timeout=0.5  # 500ms timeout for additional data
                                                 )
                                                 if not chunk:
@@ -867,12 +897,12 @@ class HighPerformanceClient:
                                     self.requests.get_nowait()
                                     self.requests.put_nowait(req)
 
-                            # Log response details for debugging
+                            # Log response details for debugging (#30)
                             self.logger.debug(
-                                f"Response status: {status_code}"
+                                f"[{request_id}] Response status: {status_code}"
                             )
                             self.logger.debug(
-                                f"Response headers: {response_headers}"
+                                f"[{request_id}] Response headers: {response_headers}"
                             )
 
                             # Handle redirects (301, 302, 303, 307, 308)

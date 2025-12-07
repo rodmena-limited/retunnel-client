@@ -19,7 +19,7 @@ async def main():
     server_addr = "localhost:6400"
     local_port = 5003
     
-    logger.info(f"Starting ReTunnel client demo...")
+    logger.info("Starting ReTunnel client demo...")
     logger.info(f"Server: {server_addr}")
     logger.info(f"Local port: {local_port}")
     
