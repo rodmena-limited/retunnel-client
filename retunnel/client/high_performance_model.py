@@ -262,7 +262,7 @@ class HighPerformanceClient:
         )
         ssl_context = False if is_localhost else self.ssl_verify
         connector = aiohttp.TCPConnector(
-            limit=100, limit_per_host=10, ssl=ssl_context
+            limit=200, limit_per_host=50, ssl=ssl_context
         )
         self.session = aiohttp.ClientSession(
             timeout=timeout, connector=connector
@@ -604,8 +604,10 @@ class HighPerformanceClient:
             self.logger.debug(f"Creating proxy connection to: {ws_url}")
 
             if self.session:
-                proxy_ws = await self.session.ws_connect(
-                    ws_url, headers=headers, heartbeat=30
+                # Use shorter timeout for proxy connection to fail fast under load
+                proxy_ws = await asyncio.wait_for(
+                    self.session.ws_connect(ws_url, headers=headers, heartbeat=30),
+                    timeout=10.0
                 )
             else:
                 raise RuntimeError("Session not initialized")
@@ -619,9 +621,16 @@ class HighPerformanceClient:
             self.proxy_tasks.add(task)
             task.add_done_callback(self.proxy_tasks.discard)
 
+        except asyncio.TimeoutError:
+            # Timeout is expected under high load - use debug level
+            self.logger.debug(
+                f"Proxy connection timeout (URL: {ws_url if 'ws_url' in locals() else 'unknown'})"
+            )
         except Exception as e:
+            error_type = type(e).__name__
+            error_msg = str(e) if str(e) else repr(e)
             self.logger.warning(
-                f"Error creating proxy connection: {e} (URL: {ws_url if 'ws_url' in locals() else 'unknown'})"
+                f"Error creating proxy connection: [{error_type}] {error_msg} (URL: {ws_url if 'ws_url' in locals() else 'unknown'})"
             )
 
     async def _handle_proxy_connection(
