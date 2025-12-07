@@ -7,8 +7,9 @@ name = "retunnel"
 version = "2.5.1"
 description = "ReTunnel - Securely expose local servers to the internet"
 authors = [{name = "ReTunnel Team", email = "support@retunnel.com"}]
-license = {text = "MIT"}
+license = "MIT"
 readme = "README.md"
+keywords = ["tunnel", "ngrok", "localhost", "webhook", "http", "https", "tcp", "reverse-proxy"]
 requires-python = ">=3.9"
 dependencies = [
     "aiohttp>=3.8.0",
@@ -24,7 +25,6 @@ dependencies = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -32,6 +32,10 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Topic :: System :: Networking",
+    "Topic :: Internet :: WWW/HTTP",
+    "Operating System :: OS Independent",
 ]
 
 [project.optional-dependencies]
