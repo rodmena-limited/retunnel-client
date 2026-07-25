@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "retunnel"
-version = "2.5.3"
+version = "3.0.3"
 description = "ReTunnel - Securely expose local servers to the internet"
 authors = [{name = "ReTunnel Team", email = "support@retunnel.com"}]
 license = "MIT"
@@ -58,7 +58,7 @@ dev = [
 retunnel = "retunnel.client.cli:cli"
 
 [tool.pytest.ini_options]
-minversion = "6.0"
+minversion = "3.0.3"
 addopts = [
     "-ra",
     "-q",
@@ -82,7 +82,7 @@ markers = [
 
 [tool.black]
 line-length = 79
-target-version = ["py38", "py39", "py310", "py311", "py312"]
+target-version = "3.0.3"
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -133,7 +133,7 @@ extend-ignore = ["E203", "W503"]
 exclude = [".git", "__pycache__", "build", "dist", ".eggs", "*.egg"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.0.3"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

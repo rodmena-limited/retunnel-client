@@ -1,495 +1,425 @@
-"""High-performance ReTunnel client implementation."""
-
-from __future__ import annotations
-
 import asyncio
 import logging
-import os
-import platform
-from typing import Any, Dict, Optional, Set
+from dataclasses import dataclass
+from typing import Any, List, Optional
 
-from pydantic import BaseModel
+import msgpack
+import websockets
+from websockets.protocol import State
 
-from ..core.api import APIClient
-from ..core.config import AuthConfig
-from ..core.connection import WebSocketConnection
-from ..core.exceptions import (
-    AuthenticationError,
-    ConnectionError,
-    TunnelError,
-)
-from ..core.protocol import (
+from retunnel.local_proxy import open_http
+from retunnel.msg.messages import (
     Auth,
-    AuthResp,
-    ErrorResp,
+    Error,
     Heartbeat,
-    NewTunnel,
-    Ping,
-    Pong,
-    RegProxy,
-    ReqProxy,
-    ReqTunnel,
-    StartProxy,
+    HeartbeatAck,
+    StreamClose,
+    StreamData,
+    StreamOpen,
+    StreamReset,
+    TunnelCreate,
+    TunnelCreated,
+    deserialize,
+    serialize,
 )
-from ..utils.id import generate_id
 
 logger = logging.getLogger(__name__)
 
 
-class TunnelConfig(BaseModel):
-    """Configuration for a tunnel."""
-
-    protocol: str = "http"
+@dataclass
+class TunnelConfig:
+    protocol: str
     local_port: int
+    name: Optional[str] = None
+    auth: Optional[str] = None
+    remote_port: Optional[int] = None
     subdomain: Optional[str] = None
     hostname: Optional[str] = None
-    auth: Optional[str] = None
     inspect: bool = True
 
 
-class Tunnel(BaseModel):
-    """Active tunnel information."""
-
+@dataclass
+class Tunnel:
     id: str
-    protocol: str
     url: str
-    local_port: int
+    protocol: str
     config: TunnelConfig
+    tunnel_id: str = ""
     subdomain: Optional[str] = None
 
 
 class ReTunnelClient:
-    """High-performance ReTunnel client."""
-
-    VERSION = "2.0.0"
-
     def __init__(
-        self,
-        server_addr: Optional[str] = None,
-        auth_token: Optional[str] = None,
-        auto_register: bool = True,
-    ):
-        # Use server address from environment or default to localhost:6400
-        if server_addr is None:
-            server_addr = os.environ.get(
-                "RETUNNEL_SERVER_ENDPOINT", "localhost:6400"
-            )
-        self.server_addr = self._normalize_server_addr(server_addr)
+        self, server_addr: str, auth_token: str, ssl_verify: bool = True
+    ) -> None:
+        self.server_addr = server_addr or "wss://retunnel.net"
+        if not self.server_addr.startswith("ws"):
+            self.server_addr = f"wss://{self.server_addr}"
+        if not self.server_addr.endswith("/api/v1/ws/tunnel"):
+            self.server_addr = f"{self.server_addr}/api/v1/ws/tunnel"
+
         self.auth_token = auth_token
-        self.auto_register = auto_register
-
-        self.client_id = generate_id("cli")
-        self.api_client = APIClient(self._get_api_url())
-        self.auth_config = AuthConfig()
-
-        self._control_conn: Optional[WebSocketConnection] = None
-        self._proxy_conns: Dict[str, WebSocketConnection] = {}
-        self._tunnels: Dict[str, Tunnel] = {}
+        self.ssl_verify = ssl_verify
+        self.ws: Optional[Any] = None
         self._running = False
-        self._tasks: Set[asyncio.Task] = set()
+        self._reconnect_task: Optional[asyncio.Task[Any]] = None
+        self.ws_streams: dict[int, asyncio.Queue[Any]] = {}
 
-        # Load auth token from config if not provided
-        if not self.auth_token:
-            self.auth_token = self.auth_config.auth_token
+    def _ws_open(self) -> bool:
+        return self.ws is not None and self.ws.state == State.OPEN
 
-    def _normalize_server_addr(self, addr: str) -> str:
-        """Normalize server address to WebSocket URL."""
-        if not addr.startswith(("ws://", "wss://")):
-            # Assume wss:// for production
-            if "localhost" in addr or "127.0.0.1" in addr:
-                addr = f"ws://{addr}"
-            else:
-                addr = f"wss://{addr}"
+    @property
+    def is_connected(self) -> bool:
+        return self._ws_open()
 
-        # Ensure /api/v1/ws/tunnel path for WebSocket endpoint
-        if not addr.endswith("/tunnel"):
-            if "/api/v1/ws" not in addr:
-                addr = addr.rstrip("/") + "/api/v1/ws/tunnel"
-            else:
-                addr = addr.rstrip("/") + "/tunnel"
-
-        return addr
-
-    def _get_api_url(self) -> str:
-        """Get REST API URL from WebSocket URL."""
-        api_url = self.server_addr.replace("/api/v1/ws/tunnel", "")
-        api_url = api_url.replace("ws://", "http://")
-        api_url = api_url.replace("wss://", "https://")
-        return api_url
+    def get_requests(self) -> List[Any]:
+        return []
 
     async def connect(self) -> None:
-        """Connect to ReTunnel server."""
-        # Auto-register if needed
-        if not self.auth_token and self.auto_register:
-            await self._auto_register()
+        if self.auth_token:
+            return
 
-        # Create control connection
-        self._control_conn = WebSocketConnection(
-            self.server_addr, self.auth_token
-        )
-        await self._control_conn.connect()
-
-        # Authenticate
-        await self._authenticate()
-
-        # Start background tasks
-        self._running = True
-        self._start_background_tasks()
-
-        logger.info(f"Connected to {self.server_addr}")
-
-    async def _auto_register(self) -> None:
-        """Automatically register anonymous user."""
         logger.info("No auth token found, registering anonymous user...")
+        from retunnel.client.api_client import ReTunnelAPIClient
+        from retunnel.client.config_manager import config_manager
 
-        try:
-            user_info = await self.api_client.register_anonymous()
-            self.auth_token = user_info.auth_token
-            self.auth_config.auth_token = self.auth_token
+        api_url = await config_manager.get_api_url()
+        if "localhost" in self.server_addr or "127.0.0.1" in self.server_addr:
+            api_url = self.server_addr.replace("wss://", "https://").replace(
+                "ws://", "http://"
+            ).split("/api/v1/")[0]
 
-            logger.info(f"Registered as {user_info.username}")
-        except Exception as e:
-            raise AuthenticationError(f"Auto-registration failed: {e}")
-
-    async def _authenticate(self) -> None:
-        """Authenticate with server."""
-        if not self._control_conn:
-            raise ConnectionError("Not connected")
-
-        # Send auth message
-        auth_msg = Auth(
-            ClientId=self.client_id,
-            Version=self.VERSION,
-            OS=platform.system(),
-            Arch=platform.machine(),
-            User=self.auth_token or "",  # Use User field for auth token
-            Password="",
-        )
-
-        await self._control_conn.send(auth_msg)
-
-        # Wait for response
-        resp = await self._control_conn.receive(timeout=10)
-        if not isinstance(resp, AuthResp):
-            raise AuthenticationError("Invalid auth response")
-
-        if resp.Error:
-            # If auth failed due to invalid token, try to refresh it
-            if "Invalid auth token" in resp.Error and self.auto_register:
-                logger.info(
-                    "Auth token invalid, registering new anonymous user..."
-                )
-
-                # Close the failed connection
-                await self._control_conn.close()
-
-                # Clear the invalid token
-                self.auth_token = None
-                self.auth_config.auth_token = None
-
-                # Register new anonymous user
-                await self._auto_register()
-
-                # Reconnect with new token
-                self._control_conn = WebSocketConnection(
-                    self.server_addr, self.auth_token
-                )
-                await self._control_conn.connect()
-
-                # Retry authentication with new token
-                auth_msg.User = self.auth_token or ""
-                await self._control_conn.send(auth_msg)
-
-                resp = await self._control_conn.receive(timeout=10)
-                if not isinstance(resp, AuthResp):
-                    raise AuthenticationError(
-                        "Invalid auth response after token refresh"
-                    )
-
-                if resp.Error:
-                    raise AuthenticationError(
-                        f"Authentication failed after token refresh: {resp.Error}"
-                    )
-            else:
-                raise AuthenticationError(resp.Error)
-
-        self.client_id = resp.ClientId
-        logger.info(f"Authenticated with client ID: {self.client_id}")
-
-    def _start_background_tasks(self) -> None:
-        """Start background tasks."""
-        # Control message handler
-        task = asyncio.create_task(self._handle_control_messages())
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-
-        # Heartbeat task
-        task = asyncio.create_task(self._heartbeat_loop())
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-
-    async def _handle_control_messages(self) -> None:
-        """Handle incoming control messages."""
-        while self._running and self._control_conn:
+        async with ReTunnelAPIClient(api_url, ssl_verify=self.ssl_verify) as api:
             try:
-                msg = await self._control_conn.receive(timeout=1)
-                if not msg:
-                    continue
-
-                if isinstance(msg, ReqProxy):
-                    # Server requesting proxy connection
-                    # Since ReqProxy doesn't specify which tunnel, we'll handle it
-                    # when we get StartProxy which has the URL
-                    asyncio.create_task(self._handle_proxy_request_new())
-                elif isinstance(msg, Pong):
-                    # Heartbeat response
-                    logger.debug("Received pong")
+                result = await api.register_user()
+                token = result.get("auth_token")
+                if token:
+                    self.auth_token = token
+                    await config_manager.set_auth_token(token)
+                    logger.info("Successfully registered and saved auth token.")
                 else:
-                    logger.debug(f"Unhandled message: {msg}")
-
+                    raise Exception("No auth token in registration response")
             except Exception as e:
-                if self._running:
-                    logger.error(f"Control message error: {e}")
-
-    async def _heartbeat_loop(self) -> None:
-        """Send periodic heartbeats."""
-        while self._running and self._control_conn:
-            try:
-                await self._control_conn.send(Ping())
-                await asyncio.sleep(30)
-            except Exception as e:
-                if self._running:
-                    logger.error(f"Heartbeat error: {e}")
-                    break
-
-    async def _subdomain_heartbeat_loop(self, subdomain: str) -> None:
-        """Send periodic heartbeats for subdomain keep-alive."""
-        while self._running and self._control_conn:
-            try:
-                heartbeat = Heartbeat(
-                    Subdomain=subdomain,
-                    Timestamp=asyncio.get_event_loop().time(),
-                )
-                await self._control_conn.send(heartbeat)
-                await asyncio.sleep(30)  # Send heartbeat every 30 seconds
-            except Exception as e:
-                if self._running:
-                    logger.error(f"Subdomain heartbeat error: {e}")
-                    break
+                raise Exception(f"Failed to register anonymous user: {e}")
 
     async def request_tunnel(self, config: TunnelConfig) -> Tunnel:
-        """Request a new tunnel."""
-        if not self._control_conn:
-            raise ConnectionError("Not connected")
+        self._running = True
+        await self.connect()
 
-        # Send tunnel request
-        req_id = generate_id("req", 8)
-        req = ReqTunnel(
-            ReqId=req_id,
-            Protocol=config.protocol,
-            Subdomain=config.subdomain or "",
-            Hostname=config.hostname or "",
-            HttpAuth=config.auth or "",
-        )
+        retry_delay = 1.0
+        while self._running:
+            try:
+                self.ws = await websockets.connect(self.server_addr)
+                await self.ws.send(serialize(Auth(token=self.auth_token)))
+                auth_resp = deserialize(await self.ws.recv())
+                if isinstance(auth_resp, Error):
+                    raise Exception(f"Auth failed: {auth_resp.message}")
 
-        await self._control_conn.send(req)
-
-        # Wait for response
-        resp = await self._control_conn.receive(timeout=10)
-
-        # Handle error response
-        if isinstance(resp, ErrorResp):
-            if resp.ErrorCode == "OVER_CAPACITY":
-                raise TunnelError(
-                    "No subdomains available. Please try again later."
+                await self.ws.send(
+                    serialize(
+                        TunnelCreate(
+                            protocol=config.protocol,
+                            subdomain=config.subdomain,
+                            remote_port=config.remote_port,
+                        )
+                    )
                 )
-            else:
-                raise TunnelError(f"{resp.ErrorCode}: {resp.Message}")
+                tunnel_resp = deserialize(await self.ws.recv())
+                if isinstance(tunnel_resp, Error):
+                    raise Exception(f"Tunnel creation failed: {tunnel_resp.message}")
+                if not isinstance(tunnel_resp, TunnelCreated):
+                    raise Exception(f"Unexpected response: {tunnel_resp}")
 
-        if not isinstance(resp, NewTunnel):
-            raise TunnelError("Invalid tunnel response")
+                tunnel = Tunnel(
+                    id=tunnel_resp.subdomain,
+                    url=tunnel_resp.url,
+                    protocol=config.protocol,
+                    config=config,
+                    tunnel_id=tunnel_resp.subdomain,
+                    subdomain=tunnel_resp.subdomain,
+                )
 
-        if resp.Error:
-            raise TunnelError(resp.Error)
+                self._reconnect_task = asyncio.create_task(
+                    self._reconnect_loop(config, tunnel)
+                )
+                return tunnel
+            except Exception as e:
+                logger.error(f"Connection error: {e}")
+                if not self._running:
+                    raise
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 60.0)
 
-        # Create tunnel object
-        # Handle both old field names (tunnel_id) and new (TunnelId)
-        tunnel_id = (
-            getattr(resp, "TunnelId", None)
-            or getattr(resp, "tunnel_id", None)
-            or resp.Subdomain
-        )
-        tunnel = Tunnel(
-            id=tunnel_id,  # Use subdomain as ID for HTTP tunnels
-            protocol=resp.Protocol,
-            url=resp.Url,
-            local_port=config.local_port,
-            config=config,
-            subdomain=resp.Subdomain,
-        )
+    async def _reconnect_loop(self, config: TunnelConfig, tunnel: Tunnel) -> None:
+        retry_delay = 1.0
+        while self._running:
+            try:
+                if not self.is_connected:
+                    self.ws = await websockets.connect(self.server_addr)
+                    await self.ws.send(serialize(Auth(token=self.auth_token)))
+                    await self.ws.recv()
+                    await self.ws.send(
+                        serialize(
+                            TunnelCreate(
+                                protocol=config.protocol,
+                                subdomain=tunnel.subdomain,
+                                remote_port=config.remote_port,
+                            )
+                        )
+                    )
+                    await self.ws.recv()
 
-        self._tunnels[tunnel.id] = tunnel
-        logger.info(f"Tunnel created: {tunnel.url}")
+                retry_delay = 1.0
+                await self._message_loop(config)
+            except Exception as e:
+                logger.error(f"Connection error: {e}")
 
-        # Start subdomain heartbeat for HTTP tunnels
-        if tunnel.subdomain and config.protocol == "http":
-            task = asyncio.create_task(
-                self._subdomain_heartbeat_loop(tunnel.subdomain)
-            )
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
+            if not self._running:
+                break
 
-        return tunnel
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 60.0)
 
-    async def _handle_proxy_request_new(self) -> None:
-        """Handle proxy connection request from server."""
+    async def _message_loop(self, config: TunnelConfig) -> None:
+        if not self.ws:
+            return
+        async for msg_raw in self.ws:
+            msg = deserialize(msg_raw)
+            if isinstance(msg, StreamOpen):
+                logger.info(
+                    f"StreamOpen received: stream_id={msg.stream_id} "
+                    f"mode={msg.mode} path={msg.path}"
+                )
+                if msg.mode == "ws":
+                    self.ws_streams[msg.stream_id] = asyncio.Queue()
+                    asyncio.create_task(self._handle_ws_stream(msg, config.local_port))
+                elif msg.mode == "tcp":
+                    self.ws_streams[msg.stream_id] = asyncio.Queue()
+                    asyncio.create_task(self._handle_tcp_stream(msg, config.local_port))
+                else:
+                    asyncio.create_task(self._handle_stream(msg, config.local_port))
+            elif isinstance(msg, StreamData):
+                queue = self.ws_streams.get(msg.stream_id)
+                if queue:
+                    queue.put_nowait(msg)
+            elif isinstance(msg, StreamClose) or isinstance(msg, StreamReset):
+                queue = self.ws_streams.get(msg.stream_id)
+                if queue:
+                    queue.put_nowait(msg)
+            elif isinstance(msg, Heartbeat):
+                if self._ws_open():
+                    await self.ws.send(serialize(HeartbeatAck()))
+            elif isinstance(msg, Error):
+                logger.error(f"Server error: {msg.message}")
+
+    async def _handle_ws_stream(self, msg: StreamOpen, local_port: int) -> None:
+        from retunnel.local_proxy import open_ws
+
         try:
-            # Create proxy connection (use /api/v1/ws/proxy endpoint)
-            proxy_url = self.server_addr.replace("/tunnel", "/proxy")
-            proxy_conn = WebSocketConnection(proxy_url, self.auth_token)
-            await proxy_conn.connect()
-
-            # Register proxy with only client_id
-            await proxy_conn.send(
-                RegProxy(
-                    ClientId=self.client_id,
+            local_ws = await open_ws(local_port, msg.path, msg.headers)
+            logger.info(f"local WS connected: port={local_port} path={msg.path}")
+        except Exception as e:
+            logger.error(f"local WS connect failed: {e}")
+            if self._ws_open():
+                await self.ws.send(
+                    serialize(StreamReset(stream_id=msg.stream_id, reason=str(e)))
                 )
-            )
+            self.ws_streams.pop(msg.stream_id, None)
+            return
 
-            # Wait for StartProxy which will tell us which tunnel
-            msg = await proxy_conn.receive(timeout=5)
-            if not isinstance(msg, StartProxy):
-                await proxy_conn.close()
+        async def read_from_local() -> None:
+            try:
+                while True:
+                    data, ws_type = await local_ws.recv()
+                    if not self._ws_open():
+                        break
+                    await self.ws.send(
+                        serialize(
+                            StreamData(
+                                stream_id=msg.stream_id,
+                                data=data,
+                                ws_type=ws_type,
+                            )
+                        )
+                    )
+            except websockets.exceptions.ConnectionClosed as e:
+                if self._ws_open():
+                    await self.ws.send(
+                        serialize(
+                            StreamClose(
+                                stream_id=msg.stream_id,
+                                code=e.code,
+                                reason=e.reason,
+                            )
+                        )
+                    )
+            except Exception as e:
+                logger.error(f"Local WS read error: {e}")
+                if self._ws_open():
+                    await self.ws.send(
+                        serialize(
+                            StreamClose(
+                                stream_id=msg.stream_id, code=1011, reason=str(e)
+                            )
+                        )
+                    )
+
+        async def read_from_server() -> None:
+            queue = self.ws_streams.get(msg.stream_id)
+            if not queue:
+                return
+            try:
+                while True:
+                    server_msg = await queue.get()
+                    if isinstance(server_msg, StreamData):
+                        ws_type = server_msg.ws_type or "binary"
+                        await local_ws.send(server_msg.data, ws_type)
+                    elif isinstance(server_msg, (StreamClose, StreamReset)):
+                        code = getattr(server_msg, "code", 1000) or 1000
+                        reason = getattr(server_msg, "reason", "") or ""
+                        await local_ws.close(code=code, reason=reason)
+                        break
+            except Exception as e:
+                logger.error(f"Server WS read error: {e}")
+
+        t1 = asyncio.create_task(read_from_local())
+        t2 = asyncio.create_task(read_from_server())
+
+        await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
+
+        if not t1.done():
+            t1.cancel()
+        if not t2.done():
+            t2.cancel()
+
+        try:
+            await local_ws.close()
+        except Exception:
+            pass
+
+        self.ws_streams.pop(msg.stream_id, None)
+
+    async def _handle_tcp_stream(self, msg: StreamOpen, local_port: int) -> None:
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1", local_port
+            )
+            logger.info(
+                f"TCP stream {msg.stream_id} -> 127.0.0.1:{local_port}"
+            )
+        except Exception as e:
+            logger.error(f"TCP connect failed: {e}")
+            if self._ws_open():
+                await self.ws.send(
+                    serialize(StreamReset(stream_id=msg.stream_id, reason=str(e)))
+                )
+            self.ws_streams.pop(msg.stream_id, None)
+            return
+
+        async def read_from_local() -> None:
+            try:
+                while True:
+                    data = await reader.read(65536)
+                    if not data:
+                        break
+                    if not self._ws_open():
+                        break
+                    await self.ws.send(
+                        serialize(
+                            StreamData(stream_id=msg.stream_id, data=data)
+                        )
+                    )
+            except Exception as e:
+                logger.debug(f"TCP local read error: {e}")
+            finally:
+                if self._ws_open():
+                    await self.ws.send(
+                        serialize(StreamClose(stream_id=msg.stream_id))
+                    )
+
+        async def read_from_server() -> None:
+            queue = self.ws_streams.get(msg.stream_id)
+            if not queue:
+                return
+            try:
+                while True:
+                    server_msg = await queue.get()
+                    if isinstance(server_msg, StreamData):
+                        writer.write(server_msg.data)
+                        await writer.drain()
+                    elif isinstance(server_msg, (StreamClose, StreamReset)):
+                        break
+            except Exception as e:
+                logger.debug(f"TCP server read error: {e}")
+
+        t1 = asyncio.create_task(read_from_local())
+        t2 = asyncio.create_task(read_from_server())
+        await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
+
+        if not t1.done():
+            t1.cancel()
+        if not t2.done():
+            t2.cancel()
+
+        writer.close()
+        self.ws_streams.pop(msg.stream_id, None)
+
+    async def _handle_stream(self, msg: StreamOpen, local_port: int) -> None:
+        if msg.mode != "http":
+            return
+
+        method = msg.headers.pop(
+            ":method", msg.headers.pop("method", msg.headers.pop("Method", "GET"))
+        )
+        try:
+            proxy_resp = await open_http(
+                port=local_port,
+                method=method,
+                path=msg.path,
+                headers=msg.headers,
+                body=msg.body,
+            )
+        except Exception as e:
+            if self._ws_open():
+                await self.ws.send(
+                    serialize(StreamReset(stream_id=msg.stream_id, reason=str(e)))
+                )
+            return
+
+        try:
+            if not self._ws_open():
                 return
 
-            # Find tunnel by URL
-            tunnel = None
-            for t in self._tunnels.values():
-                if msg.Url.startswith(t.url):
-                    tunnel = t
+            meta = {
+                "status": proxy_resp.status_code,
+                "headers": proxy_resp.response_headers,
+            }
+            meta_bytes = msgpack.packb(meta, use_bin_type=True)
+            await self.ws.send(
+                serialize(StreamData(stream_id=msg.stream_id, data=meta_bytes))
+            )
+
+            async for chunk in proxy_resp.iter_chunks():
+                if not self._ws_open():
                     break
+                await self.ws.send(
+                    serialize(StreamData(stream_id=msg.stream_id, data=chunk))
+                )
 
-            if not tunnel:
-                logger.error(f"No tunnel found for URL: {msg.Url}")
-                await proxy_conn.close()
-                return
-
-            # Generate connection ID
-            conn_id = generate_id("conn", 8)
-            self._proxy_conns[conn_id] = proxy_conn
-
-            task = asyncio.create_task(
-                self._proxy_connection(tunnel, conn_id, proxy_conn)
-            )
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
-
+            if self._ws_open():
+                await self.ws.send(serialize(StreamClose(stream_id=msg.stream_id)))
         except Exception as e:
-            logger.error(f"Proxy setup error: {e}")
-
-    async def _proxy_connection(
-        self,
-        tunnel: Tunnel,
-        conn_id: str,
-        proxy_conn: WebSocketConnection,
-    ) -> None:
-        """Proxy data between WebSocket and local server."""
-        local_reader = None
-        local_writer = None
-
-        try:
-            # Connect to local server
-            local_reader, local_writer = await asyncio.open_connection(
-                "localhost", tunnel.local_port
-            )
-
-            # Start bidirectional proxy
-            await asyncio.gather(
-                self._proxy_ws_to_local(proxy_conn, local_writer),
-                self._proxy_local_to_ws(local_reader, proxy_conn),
-            )
-
-        except Exception as e:
-            logger.error(f"Proxy error for {conn_id}: {e}")
+            logger.error(f"Stream handler error: {e}")
+            if self._ws_open():
+                await self.ws.send(
+                    serialize(StreamReset(stream_id=msg.stream_id, reason=str(e)))
+                )
         finally:
-            # Cleanup
-            if local_writer:
-                local_writer.close()
-                await local_writer.wait_closed()
-
-            await proxy_conn.close()
-            self._proxy_conns.pop(conn_id, None)
-
-    async def _proxy_ws_to_local(
-        self,
-        ws: WebSocketConnection,
-        writer: asyncio.StreamWriter,
-    ) -> None:
-        """Proxy data from WebSocket to local server."""
-        while ws.is_connected:
-            try:
-                # WebSocket sends raw bytes for proxy data
-                if ws._ws:
-                    data = await ws._ws.recv()
-                    if isinstance(data, str):
-                        data = data.encode()
-
-                    writer.write(data)
-                    await writer.drain()
-            except Exception:
-                break
-
-    async def _proxy_local_to_ws(
-        self,
-        reader: asyncio.StreamReader,
-        ws: WebSocketConnection,
-    ) -> None:
-        """Proxy data from local server to WebSocket."""
-        while ws.is_connected:
-            try:
-                data = await reader.read(65536)
-                if not data:
-                    break
-
-                if ws._ws:
-                    await ws._ws.send(data)
-            except Exception:
-                break
+            await proxy_resp.close()
 
     async def close(self) -> None:
-        """Close all connections and cleanup."""
         self._running = False
-
-        # Cancel all tasks
-        for task in self._tasks:
-            task.cancel()
-
-        # Wait for tasks to complete
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
-
-        # Close proxy connections
-        for conn in self._proxy_conns.values():
-            await conn.close()
-        self._proxy_conns.clear()
-
-        # Close control connection
-        if self._control_conn:
-            await self._control_conn.close()
-            self._control_conn = None
-
-        # Close API client
-        await self.api_client.close()
-
-        logger.info("Client closed")
-
-    async def __aenter__(self) -> ReTunnelClient:
-        """Async context manager entry."""
-        await self.connect()
-        return self
-
-    async def __aexit__(
-        self, exc_type: Any, exc_val: Any, exc_tb: Any
-    ) -> None:
-        """Async context manager exit."""
-        await self.close()
+        if self._reconnect_task:
+            self._reconnect_task.cancel()
+        if self.ws:
+            await self.ws.close()

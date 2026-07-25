@@ -1,33 +1,5 @@
-"""ReTunnel - Securely expose local servers to the internet."""
+__version__ = "3.0.3"
 
-__version__ = "2.5.3"
-__author__ = "ReTunnel Team"
-__email__ = "support@retunnel.com"
-__url__ = "https://retunnel.com"
+from .client.client import ReTunnelClient, TunnelConfig
 
-from .client.high_performance_model import (
-    HighPerformanceClient,
-    Tunnel,
-    TunnelConfig,
-)
-from .core.exceptions import (
-    AuthenticationError,
-    ConfigurationError,
-    ConnectionError,
-    ReTunnelError,
-    TunnelError,
-)
-
-ReTunnelClient = HighPerformanceClient  # Alias for backward compatibility
-
-__all__ = [
-    "ReTunnelClient",
-    "Tunnel",
-    "TunnelConfig",
-    "ReTunnelError",
-    "ConnectionError",
-    "AuthenticationError",
-    "TunnelError",
-    "ConfigurationError",
-    "__version__",
-]
+__all__ = ["ReTunnelClient", "TunnelConfig"]
