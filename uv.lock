@@ -1614,6 +1614,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
+    { name = "typing-extensions" },
     { name = "websockets" },
 ]
 
@@ -1668,6 +1669,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "types-aiofiles", marker = "extra == 'dev'" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },
+    { name = "typing-extensions", specifier = ">=4.0.0" },
     { name = "websockets", specifier = ">=11.0" },
 ]
 provides-extras = ["dev"]

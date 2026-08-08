@@ -62,6 +62,8 @@ class TestClientConfig:
             "auth_token": "to-dict-token",
             "server_url": "wss://to.dict.com",
             "api_url": "https://to.dict.com",
+            "ssl_verify": True,
+            "max_message_size": 10485760,
         }
 
 

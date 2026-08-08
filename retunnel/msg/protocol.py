@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Callable, Coroutine
+from collections.abc import Callable, Coroutine
 
 from .messages import (
     MAX_CHUNK_SIZE,
@@ -118,7 +118,7 @@ class StreamMultiplexer:
         async with self._lock:
             if len(self._streams) >= MAX_STREAMS_PER_CLIENT:
                 raise RuntimeError(
-                    "Max streams (%d) exceeded" % MAX_STREAMS_PER_CLIENT
+                    f"Max streams ({MAX_STREAMS_PER_CLIENT}) exceeded"
                 )
             stream_id = self._next_stream_id
             self._next_stream_id += 1

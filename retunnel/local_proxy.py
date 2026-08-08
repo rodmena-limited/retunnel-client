@@ -1,4 +1,7 @@
-from typing import Any, AsyncIterator, Dict, Tuple
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from typing import Any
 
 import aiohttp
 import websockets
@@ -8,7 +11,7 @@ class AsyncWsConnection:
     def __init__(self, ws: Any) -> None:
         self.ws = ws
 
-    async def recv(self) -> Tuple[bytes, str]:
+    async def recv(self) -> tuple[bytes, str]:
         msg = await self.ws.recv()
         if isinstance(msg, str):
             return msg.encode("utf-8"), "text"
@@ -25,7 +28,7 @@ class AsyncWsConnection:
 
 
 async def open_ws(
-    port: int, path: str, headers: Dict[str, str]
+    port: int, path: str, headers: dict[str, str]
 ) -> AsyncWsConnection:
     url = f"ws://127.0.0.1:{port}{path}"
     subprotocols = []
@@ -50,7 +53,7 @@ async def open_ws(
     ws = await websockets.connect(
         url,
         additional_headers=list(clean_headers.items()),
-        subprotocols=subprotocols or None,
+        subprotocols=subprotocols or None,  # type: ignore[arg-type]
     )
     return AsyncWsConnection(ws)
 
@@ -59,7 +62,7 @@ class LocalProxyResponse:
     def __init__(
         self,
         status: int,
-        headers: Dict[str, str],
+        headers: dict[str, str],
         content: aiohttp.StreamReader,
         session: aiohttp.ClientSession,
         resp: aiohttp.ClientResponse,
@@ -80,7 +83,7 @@ class LocalProxyResponse:
 
 
 async def open_http(
-    port: int, method: str, path: str, headers: Dict[str, str], body: bytes
+    port: int, method: str, path: str, headers: dict[str, str], body: bytes
 ) -> LocalProxyResponse:
     url = f"http://127.0.0.1:{port}{path}"
     session = aiohttp.ClientSession(auto_decompress=False)

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
-from typing import Any, ClassVar
+from typing import Any, Final, Union, cast
 
 import msgpack
+from typing_extensions import TypeAlias
 
 
 class StreamMode(str):
@@ -116,18 +117,18 @@ class Error:
     Type: str = field(default=MessageType.ERROR, init=False, repr=False)
 
 
-Message = (
-    Auth
-    | TunnelCreate
-    | TunnelCreated
-    | StreamOpen
-    | StreamData
-    | StreamClose
-    | StreamReset
-    | Heartbeat
-    | HeartbeatAck
-    | Error
-)
+Message: TypeAlias = Union[
+    Auth,
+    TunnelCreate,
+    TunnelCreated,
+    StreamOpen,
+    StreamData,
+    StreamClose,
+    StreamReset,
+    Heartbeat,
+    HeartbeatAck,
+    Error,
+]
 
 MESSAGE_TYPES: dict[str, type] = {
     MessageType.AUTH: Auth,
@@ -142,7 +143,7 @@ MESSAGE_TYPES: dict[str, type] = {
     MessageType.ERROR: Error,
 }
 
-_DATA_CLASS_FIELDS: ClassVar = frozenset({"Type"})
+_DATA_CLASS_FIELDS: Final = frozenset({"Type"})
 
 
 def serialize(msg: Any) -> bytes:
@@ -154,8 +155,8 @@ def serialize(msg: Any) -> bytes:
         if value is None:
             continue
         data[f.name] = value
-    data["Type"] = getattr(msg, "Type")
-    return msgpack.packb(data, use_bin_type=True)
+    data["Type"] = msg.Type
+    return cast(bytes, msgpack.packb(data, use_bin_type=True))
 
 
 def deserialize(data: bytes) -> Message:
@@ -167,14 +168,14 @@ def deserialize(data: bytes) -> Message:
         max_str_len=MAX_MESSAGE_SIZE,
     )
     if not isinstance(msg_dict, dict):
-        raise ValueError("Expected dict, got %r" % type(msg_dict))
+        raise TypeError(f"Expected dict, got {type(msg_dict)!r}")
     msg_type = msg_dict.get("Type")
     if not isinstance(msg_type, str):
-        raise ValueError("Message missing or invalid Type field")
+        raise TypeError("Message missing or invalid Type field")
     msg_class = MESSAGE_TYPES.get(msg_type)
     if msg_class is None:
-        raise ValueError("Unknown message type: %s" % msg_type)
+        raise ValueError(f"Unknown message type: {msg_type}")
     msg_dict.pop("Type", None)
     field_names = {f.name for f in fields(msg_class)}
     kwargs = {k: v for k, v in msg_dict.items() if k in field_names}
-    return msg_class(**kwargs)
+    return cast(Message, msg_class(**kwargs))

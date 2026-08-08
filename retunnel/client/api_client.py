@@ -1,12 +1,16 @@
+from __future__ import annotations
+
 """
 API client for ReTunnel server interactions
 """
 
-from typing import Any, Optional
+import types
+from typing import Any
 from urllib.parse import urljoin
 
 import aiohttp
 from aiohttp import ClientSession
+from typing_extensions import Self
 
 
 class APIError(Exception):
@@ -34,9 +38,9 @@ class ReTunnelAPIClient:
         """
         self.api_url = api_url.rstrip("/")
         self.ssl_verify = ssl_verify
-        self._session: Optional[ClientSession] = None
+        self._session: ClientSession | None = None
 
-    async def __aenter__(self) -> "ReTunnelAPIClient":
+    async def __aenter__(self) -> Self:
         """Async context manager entry"""
         # Add timeout for all requests (2 seconds)
         timeout = aiohttp.ClientTimeout(total=2)
@@ -51,7 +55,10 @@ class ReTunnelAPIClient:
         return self
 
     async def __aexit__(
-        self, exc_type: Any, exc_val: Any, exc_tb: Any
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
     ) -> None:
         """Async context manager exit"""
         if self._session:
@@ -61,8 +68,8 @@ class ReTunnelAPIClient:
         self,
         method: str,
         path: str,
-        json_data: Optional[dict[str, Any]] = None,
-        headers: Optional[dict[str, str]] = None,
+        json_data: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Make API request
 
@@ -90,7 +97,7 @@ class ReTunnelAPIClient:
         ) as response:
             try:
                 data = await response.json()
-            except Exception:
+            except (aiohttp.ContentTypeError, ValueError):
                 data = {"error": await response.text()}
 
             if response.status >= 400:
@@ -101,9 +108,7 @@ class ReTunnelAPIClient:
 
             return data  # type: ignore[no-any-return]
 
-    async def register_user(
-        self, email: Optional[str] = None
-    ) -> dict[str, Any]:
+    async def register_user(self, email: str | None = None) -> dict[str, Any]:
         """Register a new user
 
         Args:

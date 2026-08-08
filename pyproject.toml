@@ -21,6 +21,7 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     "python-dotenv>=1.0.0",
     "aiofiles>=24.1.0",
+    "typing-extensions>=4.0.0",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -150,6 +151,18 @@ strict_equality = true
 module = "msgpack"
 ignore_missing_imports = true
 
+[tool.ruff.lint.per-file-ignores]
+# Network client: websockets/aiohttp raise many exception types; the tunnel
+# must survive any transient I/O error without crashing. CLI commands must
+# always surface a clean error message and a non-zero exit code.
+"retunnel/client/client.py" = ["BLE001"]
+"retunnel/client/cli.py" = ["BLE001"]
+"retunnel/core/exceptions.py" = ["BLE001"]
+# Pydantic v2 evaluates BaseModel annotations at runtime; `X | None` raises
+# TypeError on Python 3.9, which this package still supports. Keep Optional[]
+# in pydantic models even though pyupgrade prefers the 3.10+ syntax.
+"retunnel/core/config.py" = ["UP045"]
+
 [dependency-groups]
 dev = [
     "black>=25.1.0",
@@ -158,6 +171,7 @@ dev = [
     "isort>=6.0.1",
     "mypy>=1.16.0",
     "pytest>=8.4.0",
+    "pytest-asyncio>=0.23.0",
     "twine>=6.1.0",
     "types-aiofiles>=24.1.0.20250606",
     "types-pyyaml>=6.0.12.20250516",

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -64,7 +64,7 @@ class ClientConfig(BaseSettings):
         default="INFO",
         description="Logging level",
     )
-    tunnels: List[TunnelDefinition] = Field(
+    tunnels: list[TunnelDefinition] = Field(
         default_factory=list,
         description="Tunnel definitions",
     )
@@ -98,7 +98,7 @@ class ClientConfig(BaseSettings):
             return [ClientConfig._substitute_env_vars(item) for item in data]
         return data
 
-    def save(self, path: Optional[Path] = None) -> None:
+    def save(self, path: Path | None = None) -> None:
         """Save configuration to file."""
         if path is None:
             path = self.get_default_config_file()
@@ -111,7 +111,7 @@ class ClientConfig(BaseSettings):
             json.dump(self.model_dump(exclude_none=True), f, indent=2)
 
     @classmethod
-    def load(cls, path: Optional[Path] = None) -> ClientConfig:
+    def load(cls, path: Path | None = None) -> ClientConfig:
         """Load configuration from file."""
         if path is None:
             path = cls().get_default_config_file()
@@ -136,7 +136,7 @@ class AuthConfig:
     CONFIG_PATH = Path.home() / ".retunnel.conf"
 
     def __init__(self) -> None:
-        self._data: Dict[str, Any] = {}
+        self._data: dict[str, Any] = {}
         self.load()
 
     def load(self) -> None:
@@ -145,7 +145,7 @@ class AuthConfig:
             try:
                 with open(self.CONFIG_PATH, "r") as f:
                     self._data = json.load(f)
-            except Exception:
+            except (json.JSONDecodeError, OSError):
                 self._data = {}
 
     def save(self) -> None:
@@ -159,12 +159,12 @@ class AuthConfig:
         os.chmod(self.CONFIG_PATH, 0o600)
 
     @property
-    def auth_token(self) -> Optional[str]:
+    def auth_token(self) -> str | None:
         """Get stored authentication token."""
         return self._data.get("auth_token")
 
     @auth_token.setter
-    def auth_token(self, value: Optional[str]) -> None:
+    def auth_token(self, value: str | None) -> None:
         """Set authentication token."""
         if value:
             self._data["auth_token"] = value
@@ -173,12 +173,12 @@ class AuthConfig:
         self.save()
 
     @property
-    def api_key(self) -> Optional[str]:
+    def api_key(self) -> str | None:
         """Get API key (legacy support)."""
         return self._data.get("api_key")
 
     @api_key.setter
-    def api_key(self, value: Optional[str]) -> None:
+    def api_key(self, value: str | None) -> None:
         """Set API key (legacy support)."""
         if value:
             self._data["api_key"] = value

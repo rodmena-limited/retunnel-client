@@ -13,7 +13,6 @@ import os
 import signal
 import sys
 from pathlib import Path
-from typing import Optional
 
 import click
 import yaml
@@ -40,7 +39,7 @@ class FlushingStreamHandler(logging.StreamHandler):
 
 def setup_logging(
     level: str = "INFO",
-    log_file: Optional[str] = None,
+    log_file: str | None = None,
     quiet: bool = False,
 ) -> logging.Logger:
     """Set up logging with proper flushing and stderr output."""
@@ -94,7 +93,7 @@ class Context:
         self.quiet: bool = False
         self.json_output: bool = False
         self.log_level: str = "INFO"
-        self.log_file: Optional[str] = None
+        self.log_file: str | None = None
         self.insecure: bool = False
 
 
@@ -139,7 +138,7 @@ def cli(
     quiet: bool,
     json_output: bool,
     log_level: str,
-    log_file: Optional[str],
+    log_file: str | None,
 ) -> None:
     """ReTunnel - Securely expose local servers to the internet."""
     ctx.ensure_object(Context)
@@ -207,12 +206,12 @@ def cli(
 def http(
     ctx: Context,
     port: int,
-    subdomain: Optional[str],
+    subdomain: str | None,
     spa: bool,
-    hostname: Optional[str],
-    auth: Optional[str],
-    server: Optional[str],
-    token: Optional[str],
+    hostname: str | None,
+    auth: str | None,
+    server: str | None,
+    token: str | None,
     insecure: bool,
 ) -> None:
     """Create an HTTP tunnel to expose a local port."""
@@ -274,9 +273,9 @@ def http(
 def tcp(
     ctx: Context,
     port: int,
-    remote_port: Optional[int],
-    server: Optional[str],
-    token: Optional[str],
+    remote_port: int | None,
+    server: str | None,
+    token: str | None,
     insecure: bool,
 ) -> None:
     """Create a TCP tunnel to expose a local port."""
@@ -341,7 +340,7 @@ def start(ctx: Context, config_path: Path) -> None:
 @click.option(
     "--stdin", is_flag=True, help="Read token from stdin (for piping)"
 )
-def authtoken(token: Optional[str], stdin: bool) -> None:
+def authtoken(token: str | None, stdin: bool) -> None:
     """Save authentication token for future use."""
     if stdin:
         token = sys.stdin.read().strip()
@@ -454,12 +453,12 @@ def credits() -> None:
 
 async def _run_tunnel(
     config: TunnelConfig,
-    server: Optional[str] = None,
-    token: Optional[str] = None,
+    server: str | None = None,
+    token: str | None = None,
     ssl_verify: bool = True,
     quiet: bool = False,
     json_output: bool = False,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger | None = None,
 ) -> int:
     """Run a single tunnel."""
     if logger is None:
@@ -529,7 +528,7 @@ async def _run_from_config(
     config: ClientConfig,
     quiet: bool = False,
     json_output: bool = False,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger | None = None,
 ) -> int:
     """Run tunnels from configuration file."""
     if logger is None:

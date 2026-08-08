@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Client configuration management for ReTunnel
 
@@ -10,7 +12,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import aiofiles
 
@@ -19,14 +21,14 @@ import aiofiles
 class ClientConfig:
     """ReTunnel client configuration"""
 
-    auth_token: Optional[str] = None
+    auth_token: str | None = None
     server_url: str = "wss://retunnel.net"  # WebSocket endpoint for tunnels
     api_url: str = "https://retunnel.net"  # REST API endpoint
     ssl_verify: bool = True  # Verify SSL certificates by default (#27)
     max_message_size: int = 10 * 1024 * 1024  # 10MB default (#29)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ClientConfig":
+    def from_dict(cls, data: dict[str, Any]) -> ClientConfig:
         """Create config from dictionary"""
         # Handle missing fields for backward compatibility
         return cls(
@@ -51,7 +53,7 @@ class ClientConfig:
 class ConfigManager:
     """Manages client configuration file"""
 
-    def __init__(self, config_path: Optional[Path] = None):
+    def __init__(self, config_path: Path | None = None):
         """Initialize config manager
 
         Args:
@@ -62,7 +64,7 @@ class ConfigManager:
             config_path = home / ".retunnel.conf"
 
         self.config_path = config_path
-        self._config: Optional[ClientConfig] = None
+        self._config: ClientConfig | None = None
 
     async def load(self) -> ClientConfig:
         """Load configuration from file
@@ -84,9 +86,7 @@ class ConfigManager:
             async with aiofiles.open(self.config_path, "r") as f:
                 data = json.loads(await f.read())
                 self._config = ClientConfig.from_dict(data)
-                # Remove print statement that was polluting output
-        except Exception as e:
-            # If config is corrupted, create new one
+        except (json.JSONDecodeError, OSError, ValueError) as e:
             print(f"Error loading config: {e}", file=sys.stderr)
             self._config = ClientConfig()
             await self.save()
@@ -108,7 +108,7 @@ class ConfigManager:
         # Set file permissions to 600 (read/write for owner only)
         os.chmod(self.config_path, 0o600)
 
-    async def get_auth_token(self) -> Optional[str]:
+    async def get_auth_token(self) -> str | None:
         """Get authentication token"""
         config = await self.load()
         return config.auth_token

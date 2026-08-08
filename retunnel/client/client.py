@@ -1,12 +1,18 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, cast
 
 import msgpack
 import websockets
 from websockets.protocol import State
 
+from retunnel.core.exceptions import (
+    AuthenticationError,
+    TunnelError,
+)
 from retunnel.local_proxy import open_http
 from retunnel.msg.messages import (
     Auth,
@@ -30,13 +36,13 @@ logger = logging.getLogger(__name__)
 class TunnelConfig:
     protocol: str
     local_port: int
-    name: Optional[str] = None
-    auth: Optional[str] = None
-    remote_port: Optional[int] = None
-    subdomain: Optional[str] = None
+    name: str | None = None
+    auth: str | None = None
+    remote_port: int | None = None
+    subdomain: str | None = None
     spa: bool = False
-    path: Optional[str] = None
-    hostname: Optional[str] = None
+    path: str | None = None
+    hostname: str | None = None
     inspect: bool = True
 
 
@@ -47,8 +53,8 @@ class Tunnel:
     protocol: str
     config: TunnelConfig
     tunnel_id: str = ""
-    subdomain: Optional[str] = None
-    path: Optional[str] = None
+    subdomain: str | None = None
+    path: str | None = None
 
 
 class ReTunnelClient:
@@ -63,19 +69,28 @@ class ReTunnelClient:
 
         self.auth_token = auth_token
         self.ssl_verify = ssl_verify
-        self.ws: Optional[Any] = None
+        # Version-agnostic socket: websockets >= 11 exposes different protocol
+        # classes across releases; guarded by _ws_open() at every access site.
+        self.ws: Any = None
         self._running = False
-        self._reconnect_task: Optional[asyncio.Task[Any]] = None
+        self._reconnect_task: asyncio.Task[Any] | None = None
         self.ws_streams: dict[int, asyncio.Queue[Any]] = {}
 
     def _ws_open(self) -> bool:
         return self.ws is not None and self.ws.state == State.OPEN
 
+    async def _recv_bytes(self) -> bytes:
+        """Receive a binary frame from the control WebSocket."""
+        data = await self.ws.recv()
+        if isinstance(data, str):
+            return data.encode("utf-8")
+        return cast(bytes, data)
+
     @property
     def is_connected(self) -> bool:
         return self._ws_open()
 
-    def get_requests(self) -> List[Any]:
+    def get_requests(self) -> list[Any]:
         return []
 
     async def connect(self) -> None:
@@ -107,9 +122,13 @@ class ReTunnelClient:
                         "Successfully registered and saved auth token."
                     )
                 else:
-                    raise Exception("No auth token in registration response")
+                    raise AuthenticationError(
+                        "No auth token in registration response"
+                    )
             except Exception as e:
-                raise Exception(f"Failed to register anonymous user: {e}")
+                raise AuthenticationError(
+                    f"Failed to register anonymous user: {e}"
+                )
 
     async def request_tunnel(self, config: TunnelConfig) -> Tunnel:
         self._running = True
@@ -120,9 +139,11 @@ class ReTunnelClient:
             try:
                 self.ws = await websockets.connect(self.server_addr)
                 await self.ws.send(serialize(Auth(token=self.auth_token)))
-                auth_resp = deserialize(await self.ws.recv())
+                auth_resp = deserialize(await self._recv_bytes())
                 if isinstance(auth_resp, Error):
-                    raise Exception(f"Auth failed: {auth_resp.message}")
+                    raise AuthenticationError(
+                        f"Auth failed: {auth_resp.message}"
+                    )
 
                 await self.ws.send(
                     serialize(
@@ -134,13 +155,13 @@ class ReTunnelClient:
                         )
                     )
                 )
-                tunnel_resp = deserialize(await self.ws.recv())
+                tunnel_resp = deserialize(await self._recv_bytes())
                 if isinstance(tunnel_resp, Error):
-                    raise Exception(
+                    raise TunnelError(
                         f"Tunnel creation failed: {tunnel_resp.message}"
                     )
                 if not isinstance(tunnel_resp, TunnelCreated):
-                    raise Exception(f"Unexpected response: {tunnel_resp}")
+                    raise TypeError(f"Unexpected response: {tunnel_resp}")
 
                 tunnel = Tunnel(
                     id=tunnel_resp.subdomain,
@@ -162,6 +183,7 @@ class ReTunnelClient:
                     raise
                 await asyncio.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, 60.0)
+        raise TunnelError("Tunnel request aborted")
 
     async def _reconnect_loop(
         self, config: TunnelConfig, tunnel: Tunnel
@@ -172,7 +194,7 @@ class ReTunnelClient:
                 if not self.is_connected:
                     self.ws = await websockets.connect(self.server_addr)
                     await self.ws.send(serialize(Auth(token=self.auth_token)))
-                    await self.ws.recv()
+                    await self._recv_bytes()
                     await self.ws.send(
                         serialize(
                             TunnelCreate(
@@ -183,12 +205,12 @@ class ReTunnelClient:
                             )
                         )
                     )
-                    resp = deserialize(await self.ws.recv())
+                    resp = deserialize(await self._recv_bytes())
                     if isinstance(resp, Error):
                         logger.error(
                             f"Reconnect tunnel creation failed: {resp.message}"
                         )
-                        raise Exception(
+                        raise TunnelError(
                             f"Tunnel creation failed: {resp.message}"
                         )
                     if isinstance(resp, TunnelCreated):
@@ -231,11 +253,7 @@ class ReTunnelClient:
                     asyncio.create_task(
                         self._handle_stream(msg, config.local_port)
                     )
-            elif isinstance(msg, StreamData):
-                queue = self.ws_streams.get(msg.stream_id)
-                if queue:
-                    queue.put_nowait(msg)
-            elif isinstance(msg, StreamClose) or isinstance(msg, StreamReset):
+            elif isinstance(msg, (StreamData, StreamClose, StreamReset)):
                 queue = self.ws_streams.get(msg.stream_id)
                 if queue:
                     queue.put_nowait(msg)
@@ -336,7 +354,7 @@ class ReTunnelClient:
         try:
             await local_ws.close()
         except Exception:
-            pass
+            logger.debug("Local WS already closed")
 
         self.ws_streams.pop(msg.stream_id, None)
 
