@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """ReTunnel client module."""
+
+from __future__ import annotations
 
 from .client import ReTunnelClient, Tunnel, TunnelConfig
 

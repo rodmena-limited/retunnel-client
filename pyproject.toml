@@ -53,6 +53,7 @@ dev = [
     "aioresponses>=0.7.4",
     "types-aiofiles",
     "types-pyyaml",
+    "ruff>=0.16.0",
 ]
 
 [project.scripts]
@@ -135,21 +136,28 @@ exclude = [".git", "__pycache__", "build", "dist", ".eggs", "*.egg"]
 
 [tool.mypy]
 python_version = "3.9"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
-disallow_incomplete_defs = true
-check_untyped_defs = true
-disallow_untyped_decorators = true
-no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-warn_no_return = true
-strict_equality = true
+strict = true
 
 [[tool.mypy.overrides]]
 module = "msgpack"
 ignore_missing_imports = true
+
+[tool.ruff]
+# This package is published to PyPI and must import on Python 3.9, so the
+# target version pins pyupgrade away from 3.10+ syntax. The bundled copy of the
+# shared protocol library is linted here (rather than in retunnel-server, which
+# targets 3.13) precisely because this is the strictest of the three copies.
+target-version = "py39"
+line-length = 79
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",
+    "B", "BLE", "ASYNC", "DTZ", "UP",
+    "C4", "PIE", "RUF",
+    "S110", "S112",
+]
+ignore = ["E501"]  # line length is black's job
 
 [tool.ruff.lint.per-file-ignores]
 # Network client: websockets/aiohttp raise many exception types; the tunnel
@@ -175,4 +183,5 @@ dev = [
     "twine>=6.1.0",
     "types-aiofiles>=24.1.0.20250606",
     "types-pyyaml>=6.0.12.20250516",
+    "ruff>=0.16.0",
 ]

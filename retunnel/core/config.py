@@ -72,7 +72,7 @@ class ClientConfig(BaseSettings):
     @classmethod
     def from_yaml(cls, path: Path) -> ClientConfig:
         """Load configuration from YAML file."""
-        with open(path, "r") as f:
+        with open(path) as f:
             data = yaml.safe_load(f)
 
         # Support environment variable substitution
@@ -120,7 +120,7 @@ class ClientConfig(BaseSettings):
             # Return defaults if file doesn't exist
             return cls()
 
-        with open(path, "r") as f:
+        with open(path) as f:
             data = json.load(f)
 
         return cls(**data)
@@ -143,7 +143,7 @@ class AuthConfig:
         """Load configuration from file."""
         if self.CONFIG_PATH.exists():
             try:
-                with open(self.CONFIG_PATH, "r") as f:
+                with open(self.CONFIG_PATH) as f:
                     self._data = json.load(f)
             except (json.JSONDecodeError, OSError):
                 self._data = {}

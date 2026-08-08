@@ -1,11 +1,11 @@
-from __future__ import annotations
-
 """
 Client configuration management for ReTunnel
 
 Handles ~/.retunnel.conf for storing authentication tokens
 and server configuration.
 """
+
+from __future__ import annotations
 
 import json
 import os
@@ -83,7 +83,7 @@ class ConfigManager:
             return self._config
 
         try:
-            async with aiofiles.open(self.config_path, "r") as f:
+            async with aiofiles.open(self.config_path) as f:
                 data = json.loads(await f.read())
                 self._config = ClientConfig.from_dict(data)
         except (json.JSONDecodeError, OSError, ValueError) as e:

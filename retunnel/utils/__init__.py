@@ -1,7 +1,7 @@
-from __future__ import annotations
-
 """
 Utility functions and helpers
 """
+
+from __future__ import annotations
 
 __all__: list[str] = []

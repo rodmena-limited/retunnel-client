@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """ReTunnel client exceptions."""
+
+from __future__ import annotations
 
 from functools import wraps
 from typing import Any, Callable, TypeVar
@@ -57,6 +57,6 @@ def handle_api_error(func: F) -> F:
         try:
             return func(*args, **kwargs)
         except Exception as e:
-            raise APIError(f"API operation failed: {e!s}")
+            raise APIError(f"API operation failed: {e!s}") from e
 
     return wrapper  # type: ignore[return-value]

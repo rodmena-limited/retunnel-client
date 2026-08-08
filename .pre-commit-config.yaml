@@ -1,0 +1,50 @@
+# Pre-commit gates for the retunnel client (issuedb #43).
+#
+# This package is a git submodule of the retunnel repo, so the parent repo's
+# hooks cannot see these files -- it needs its own config. Hook versions are
+# pinned to match the tools this package pins in pyproject.toml, otherwise the
+# hook reformats what `make format` and CI then reject.
+#
+# Install once:   pre-commit install
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: debug-statements
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.2
+    hooks:
+      # Target is py39 (set in pyproject.toml): this package is published to
+      # PyPI and must import on its minimum supported Python.
+      - id: ruff
+        files: ^(retunnel|tests)/
+
+  - repo: https://github.com/psf/black
+    rev: 25.1.0 # matches this package's pinned black
+    hooks:
+      - id: black
+        files: ^(retunnel|tests)/
+        args: [--line-length=79]
+
+  - repo: https://github.com/pycqa/isort
+    rev: 6.0.1
+    hooks:
+      - id: isort
+        files: ^(retunnel|tests)/
+        args: [--profile=black, --src-path=.]
+
+  - repo: local
+    hooks:
+      # Mirrors the parent repo's rule: a broad handler that records nothing
+      # turns a failure into a silent success.
+      - id: no-silent-except
+        name: no silently swallowed exceptions
+        entry: python3 scripts/check_no_silent_except.py
+        language: system
+        types: [python]

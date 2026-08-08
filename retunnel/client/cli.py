@@ -13,6 +13,7 @@ import os
 import signal
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, TextIO
 
 import click
 import yaml
@@ -29,7 +30,16 @@ EXIT_USAGE = 2
 EXIT_UNAVAILABLE = 69  # EX_UNAVAILABLE - service unavailable
 
 
-class FlushingStreamHandler(logging.StreamHandler):
+if TYPE_CHECKING:
+    # logging.StreamHandler is generic to type checkers but is NOT subscriptable
+    # at runtime on Python 3.9, which this package still supports. Aliasing it
+    # under TYPE_CHECKING keeps the annotation precise without a suppression.
+    _StreamHandlerBase = logging.StreamHandler[TextIO]
+else:
+    _StreamHandlerBase = logging.StreamHandler
+
+
+class FlushingStreamHandler(_StreamHandlerBase):
     """StreamHandler that flushes after every emit for real-time output."""
 
     def emit(self, record: logging.LogRecord) -> None:

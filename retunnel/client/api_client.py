@@ -1,8 +1,8 @@
-from __future__ import annotations
-
 """
 API client for ReTunnel server interactions
 """
+
+from __future__ import annotations
 
 import types
 from typing import Any

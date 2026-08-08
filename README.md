@@ -89,12 +89,12 @@ tunnels:
     protocol: http
     local_port: 8080
     subdomain: myapp
-    
+
   - name: api
     protocol: http
     local_port: 3000
     auth: user:pass
-    
+
   - name: ssh
     protocol: tcp
     local_port: 22
@@ -121,16 +121,16 @@ from retunnel import ReTunnelClient, TunnelConfig
 async def main():
     # Create client
     client = ReTunnelClient()
-    
+
     # Connect to server
     await client.connect()
-    
+
     # Create HTTP tunnel
     config = TunnelConfig(protocol="http", local_port=8080)
     tunnel = await client.request_tunnel(config)
-    
+
     print(f"Tunnel URL: {tunnel.url}")
-    
+
     # Keep running
     await asyncio.Event().wait()
 

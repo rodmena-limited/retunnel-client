@@ -143,7 +143,7 @@ class ReTunnelClient:
             except Exception as e:
                 raise AuthenticationError(
                     f"Failed to register anonymous user: {e}"
-                )
+                ) from e
 
     async def request_tunnel(self, config: TunnelConfig) -> Tunnel:
         self._running = True
