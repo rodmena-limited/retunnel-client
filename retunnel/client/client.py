@@ -31,6 +31,10 @@ from retunnel.msg.messages import (
 
 logger = logging.getLogger(__name__)
 
+# Per-stream inbound queue cap for server->client data. A local consumer that
+# is slower than the server must not let memory grow without bound.
+MAX_WS_QUEUE_SIZE = 128
+
 
 @dataclass
 class TunnelConfig:
@@ -75,6 +79,17 @@ class ReTunnelClient:
         self._running = False
         self._reconnect_task: asyncio.Task[Any] | None = None
         self.ws_streams: dict[int, asyncio.Queue[Any]] = {}
+        self._stream_tasks: set[asyncio.Task[Any]] = set()
+
+    def _track_stream_task(self, task: asyncio.Task[Any]) -> None:
+        self._stream_tasks.add(task)
+        task.add_done_callback(self._stream_tasks.discard)
+
+    def _reset_streams(self) -> None:
+        for task in list(self._stream_tasks):
+            task.cancel()
+        self._stream_tasks.clear()
+        self.ws_streams.clear()
 
     def _ws_open(self) -> bool:
         return self.ws is not None and self.ws.state == State.OPEN
@@ -233,35 +248,62 @@ class ReTunnelClient:
     async def _message_loop(self, config: TunnelConfig) -> None:
         if not self.ws:
             return
-        async for msg_raw in self.ws:
-            msg = deserialize(msg_raw)
-            if isinstance(msg, StreamOpen):
-                logger.info(
-                    f"StreamOpen received: stream_id={msg.stream_id} "
-                    f"mode={msg.mode} path={msg.path}"
-                )
-                self.ws_streams[msg.stream_id] = asyncio.Queue()
-                if msg.mode == "ws":
-                    asyncio.create_task(
-                        self._handle_ws_stream(msg, config.local_port)
+        try:
+            async for msg_raw in self.ws:
+                msg = deserialize(msg_raw)
+                if isinstance(msg, StreamOpen):
+                    logger.info(
+                        f"StreamOpen received: stream_id={msg.stream_id} "
+                        f"mode={msg.mode} path={msg.path}"
                     )
-                elif msg.mode == "tcp":
-                    asyncio.create_task(
-                        self._handle_tcp_stream(msg, config.local_port)
+                    self.ws_streams[msg.stream_id] = asyncio.Queue(
+                        maxsize=MAX_WS_QUEUE_SIZE
                     )
-                else:
-                    asyncio.create_task(
-                        self._handle_stream(msg, config.local_port)
-                    )
-            elif isinstance(msg, (StreamData, StreamClose, StreamReset)):
-                queue = self.ws_streams.get(msg.stream_id)
-                if queue:
-                    queue.put_nowait(msg)
-            elif isinstance(msg, Heartbeat):
-                if self._ws_open():
-                    await self.ws.send(serialize(HeartbeatAck()))
-            elif isinstance(msg, Error):
-                logger.error(f"Server error: {msg.message}")
+                    if msg.mode == "ws":
+                        self._track_stream_task(
+                            asyncio.create_task(
+                                self._handle_ws_stream(msg, config.local_port)
+                            )
+                        )
+                    elif msg.mode == "tcp":
+                        self._track_stream_task(
+                            asyncio.create_task(
+                                self._handle_tcp_stream(msg, config.local_port)
+                            )
+                        )
+                    else:
+                        self._track_stream_task(
+                            asyncio.create_task(
+                                self._handle_stream(msg, config.local_port)
+                            )
+                        )
+                elif isinstance(msg, (StreamData, StreamClose, StreamReset)):
+                    queue = self.ws_streams.get(msg.stream_id)
+                    if queue:
+                        try:
+                            queue.put_nowait(msg)
+                        except asyncio.QueueFull:
+                            # Local consumer is slower than the server; reset
+                            # the stream so the server stops sending and
+                            # memory stays bounded.
+                            await self.ws.send(
+                                serialize(
+                                    StreamReset(
+                                        stream_id=msg.stream_id,
+                                        reason="buffer overflow",
+                                    )
+                                )
+                            )
+                            self.ws_streams.pop(msg.stream_id, None)
+                elif isinstance(msg, Heartbeat):
+                    if self._ws_open():
+                        await self.ws.send(serialize(HeartbeatAck()))
+                elif isinstance(msg, Error):
+                    logger.error(f"Server error: {msg.message}")
+        finally:
+            # The control socket is gone: cancel in-flight stream handlers and
+            # drop their queues so reconnect churn cannot accumulate memory.
+            self._reset_streams()
 
     async def _handle_ws_stream(
         self, msg: StreamOpen, local_port: int

@@ -18,6 +18,11 @@ from .messages import (
 
 logger = logging.getLogger(__name__)
 
+# Per-stream inbound buffer cap. A peer streaming faster than the consumer
+# drains (slow public client, slow local server) must not grow memory without
+# bound; crossing this budget resets the stream so the peer stops sending.
+MAX_INBOUND_BYTES = 4 * 1024 * 1024
+
 
 class StreamClosedError(Exception):
     pass
@@ -31,15 +36,21 @@ class Stream:
         self._inbound: asyncio.Queue[tuple[bytes, str | None]] = (
             asyncio.Queue()
         )
+        self._inbound_bytes = 0
         self._closed = False
         self._close_code: int | None = None
         self._close_reason: str | None = None
         self._close_event = asyncio.Event()
 
-    def feed_data(self, data: bytes, ws_type: str | None = None) -> None:
+    def feed_data(self, data: bytes, ws_type: str | None = None) -> bool:
+        """Queue one chunk. Returns False when closed or over the buffer cap."""
         if self._closed:
-            return
+            return False
+        if self._inbound_bytes + len(data) > MAX_INBOUND_BYTES:
+            return False
         self._inbound.put_nowait((data, ws_type))
+        self._inbound_bytes += len(data)
+        return True
 
     def feed_close(
         self, code: int | None = None, reason: str | None = None
@@ -50,7 +61,12 @@ class Stream:
         self._close_code = code
         self._close_reason = reason
         self._close_event.set()
-        self._inbound.put_nowait((b"", None))
+        try:
+            self._inbound.put_nowait((b"", None))
+        except asyncio.QueueFull:
+            # Buffer already full of data; the reader will observe `closed`
+            # and `empty` after draining and return None.
+            pass
 
     async def read(self) -> tuple[bytes, str | None] | None:
         if self._closed and self._inbound.empty():
@@ -58,6 +74,7 @@ class Stream:
         item = await self._inbound.get()
         if self._closed and item == (b"", None):
             return None
+        self._inbound_bytes -= len(item[0])
         return item
 
     async def read_all(self) -> bytes:
@@ -178,7 +195,10 @@ class StreamMultiplexer:
             if stream is None:
                 logger.warning("Data for unknown stream %d", msg.stream_id)
                 return
-            stream.feed_data(msg.data, msg.ws_type)
+            if not stream.feed_data(msg.data, msg.ws_type) and not stream.closed:
+                # Over the inbound buffer budget: tell the peer to stop
+                # sending and tear the stream down to bound memory.
+                await self.send_reset(msg.stream_id, reason="buffer overflow")
         elif isinstance(msg, StreamClose):
             stream = self._streams.get(msg.stream_id)
             if stream is None:
@@ -192,6 +212,13 @@ class StreamMultiplexer:
             stream.feed_close()
             self._remove_stream(msg.stream_id)
         elif isinstance(msg, StreamOpen):
+            if msg.stream_id in self._streams:
+                # A client cannot open a stream id the server already owns;
+                # silently dropping prevents stream hijacking via id collision.
+                logger.warning(
+                    "Duplicate StreamOpen for stream %d", msg.stream_id
+                )
+                return
             stream = Stream(msg.stream_id, msg.tunnel_id, msg.mode)
             self._streams[msg.stream_id] = stream
         else:
