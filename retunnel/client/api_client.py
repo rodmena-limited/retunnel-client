@@ -42,7 +42,9 @@ class ReTunnelAPIClient:
         timeout = aiohttp.ClientTimeout(total=2)
         # Use SSL verification setting (#27)
         # For localhost, always disable SSL verification
-        is_localhost = "localhost" in self.api_url or "127.0.0.1" in self.api_url
+        is_localhost = (
+            "localhost" in self.api_url or "127.0.0.1" in self.api_url
+        )
         ssl_context = False if is_localhost else self.ssl_verify
         connector = aiohttp.TCPConnector(ssl=ssl_context)
         self._session = ClientSession(timeout=timeout, connector=connector)

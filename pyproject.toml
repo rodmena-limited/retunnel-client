@@ -82,7 +82,7 @@ markers = [
 
 [tool.black]
 line-length = 79
-target-version = "3.0.3"
+target-version = ["py39"]
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -133,7 +133,7 @@ extend-ignore = ["E203", "W503"]
 exclude = [".git", "__pycache__", "build", "dist", ".eggs", "*.egg"]
 
 [tool.mypy]
-python_version = "3.0.3"
+python_version = "3.9"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import msgpack
 
@@ -45,16 +45,22 @@ class Auth:
 class TunnelCreate:
     protocol: str
     subdomain: str | None = None
+    path: str | None = None
     remote_port: int | None = None
-    Type: str = field(default=MessageType.TUNNEL_CREATE, init=False, repr=False)
+    Type: str = field(
+        default=MessageType.TUNNEL_CREATE, init=False, repr=False
+    )
 
 
 @dataclass
 class TunnelCreated:
     url: str
     subdomain: str
+    path: str | None = None
     remote_port: int | None = None
-    Type: str = field(default=MessageType.TUNNEL_CREATED, init=False, repr=False)
+    Type: str = field(
+        default=MessageType.TUNNEL_CREATED, init=False, repr=False
+    )
 
 
 @dataclass
@@ -98,7 +104,9 @@ class Heartbeat:
 
 @dataclass
 class HeartbeatAck:
-    Type: str = field(default=MessageType.HEARTBEAT_ACK, init=False, repr=False)
+    Type: str = field(
+        default=MessageType.HEARTBEAT_ACK, init=False, repr=False
+    )
 
 
 @dataclass

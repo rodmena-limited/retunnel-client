@@ -1,4 +1,3 @@
-import contextlib
 from typing import Any, AsyncIterator, Dict, Tuple
 
 import aiohttp
@@ -36,8 +35,16 @@ async def open_ws(
 
     # Filter out headers that shouldn't be passed to websockets.connect
     clean_headers = {
-        k: v for k, v in headers.items()
-        if k.lower() not in ("host", "connection", "upgrade", "sec-websocket-key", "sec-websocket-version")
+        k: v
+        for k, v in headers.items()
+        if k.lower()
+        not in (
+            "host",
+            "connection",
+            "upgrade",
+            "sec-websocket-key",
+            "sec-websocket-version",
+        )
     }
 
     ws = await websockets.connect(

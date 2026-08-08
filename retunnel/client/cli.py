@@ -119,7 +119,9 @@ pass_context = click.make_pass_decorator(Context, ensure=True)
 @click.option(
     "--log-level",
     "-l",
-    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"], case_sensitive=False),
+    type=click.Choice(
+        ["DEBUG", "INFO", "WARNING", "ERROR"], case_sensitive=False
+    ),
     default="INFO",
     envvar="RETUNNEL_LOG_LEVEL",
     help="Set logging verbosity [default: INFO]",
@@ -160,10 +162,15 @@ def cli(
 @cli.command()
 @click.argument("port", type=click.IntRange(1, 65535))
 @click.option(
-    "-s",
     "--subdomain",
     metavar="NAME",
     help="Request specific subdomain",
+)
+@click.option(
+    "-s",
+    "--spa",
+    is_flag=True,
+    help="Single-page-app mode: serve at retunnel.net/<ulid> (no subdomain needed)",
 )
 @click.option(
     "-H",
@@ -201,6 +208,7 @@ def http(
     ctx: Context,
     port: int,
     subdomain: Optional[str],
+    spa: bool,
     hostname: Optional[str],
     auth: Optional[str],
     server: Optional[str],
@@ -214,6 +222,7 @@ def http(
         protocol="http",
         local_port=port,
         subdomain=subdomain,
+        spa=spa,
         hostname=hostname,
         auth=auth,
         inspect=True,
@@ -329,7 +338,9 @@ def start(ctx: Context, config_path: Path) -> None:
 
 @cli.command()
 @click.argument("token", required=False)
-@click.option("--stdin", is_flag=True, help="Read token from stdin (for piping)")
+@click.option(
+    "--stdin", is_flag=True, help="Read token from stdin (for piping)"
+)
 def authtoken(token: Optional[str], stdin: bool) -> None:
     """Save authentication token for future use."""
     if stdin:
@@ -353,7 +364,9 @@ def authtoken(token: Optional[str], stdin: bool) -> None:
 
 @cli.command()
 @click.option("--show", is_flag=True, help="Show current configuration")
-@click.option("--example", is_flag=True, help="Print example YAML configuration")
+@click.option(
+    "--example", is_flag=True, help="Print example YAML configuration"
+)
 @click.option("--path", is_flag=True, help="Print config file path")
 def config(show: bool, example: bool, path: bool) -> None:
     """View or manage ReTunnel configuration."""
@@ -375,7 +388,9 @@ def config(show: bool, example: bool, path: bool) -> None:
         echo_stderr(f"  Config: {auth_config.CONFIG_PATH}")
         echo_stderr("")
         echo_stderr("Environment:")
-        echo_stderr(f"  RETUNNEL_SERVER: {os.environ.get('RETUNNEL_SERVER', '(not set)')}")
+        echo_stderr(
+            f"  RETUNNEL_SERVER: {os.environ.get('RETUNNEL_SERVER', '(not set)')}"
+        )
         echo_stderr(
             f"  RETUNNEL_AUTH_TOKEN: {'(set)' if os.environ.get('RETUNNEL_AUTH_TOKEN') else '(not set)'}"
         )
@@ -400,7 +415,11 @@ def config(show: bool, example: bool, path: bool) -> None:
         }
         echo_stdout("# ReTunnel configuration file")
         echo_stdout("# Save as retunnel.yml and run: retunnel start")
-        echo_stdout(yaml.dump(example_config, default_flow_style=False, sort_keys=False))
+        echo_stdout(
+            yaml.dump(
+                example_config, default_flow_style=False, sort_keys=False
+            )
+        )
 
     else:
         echo_stderr("Usage: retunnel config [--show|--example|--path]")
@@ -485,7 +504,9 @@ async def _run_tunnel(
             echo_stdout(tunnel.url)
             if not quiet:
                 echo_stderr("")
-                echo_stderr(f"Forwarding {tunnel.url} -> localhost:{config.local_port}")
+                echo_stderr(
+                    f"Forwarding {tunnel.url} -> localhost:{config.local_port}"
+                )
                 echo_stderr("")
                 echo_stderr("Press Ctrl+C to stop")
                 echo_stderr("-" * 40)
@@ -573,7 +594,9 @@ async def _run_from_config(
                 echo_stderr(f"Active Tunnels ({len(tunnels)}):")
                 echo_stderr("-" * 40)
                 for name, tunnel, tc in tunnels:
-                    echo_stderr(f"  {name}: {tunnel.url} -> localhost:{tc.local_port}")
+                    echo_stderr(
+                        f"  {name}: {tunnel.url} -> localhost:{tc.local_port}"
+                    )
                 echo_stderr("")
                 echo_stderr("Press Ctrl+C to stop all tunnels")
 

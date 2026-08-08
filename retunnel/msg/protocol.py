@@ -28,7 +28,9 @@ class Stream:
         self.stream_id = stream_id
         self.tunnel_id = tunnel_id
         self.mode = mode
-        self._inbound: asyncio.Queue[tuple[bytes, str | None]] = asyncio.Queue()
+        self._inbound: asyncio.Queue[tuple[bytes, str | None]] = (
+            asyncio.Queue()
+        )
         self._closed = False
         self._close_code: int | None = None
         self._close_reason: str | None = None
@@ -39,7 +41,9 @@ class Stream:
             return
         self._inbound.put_nowait((data, ws_type))
 
-    def feed_close(self, code: int | None = None, reason: str | None = None) -> None:
+    def feed_close(
+        self, code: int | None = None, reason: str | None = None
+    ) -> None:
         if self._closed:
             return
         self._closed = True
@@ -104,12 +108,18 @@ class StreamMultiplexer:
         return self._streams.get(stream_id)
 
     async def allocate_stream(
-        self, tunnel_id: str, mode: str, path: str = "/",
-        headers: dict[str, str] | None = None, body: bytes = b"",
+        self,
+        tunnel_id: str,
+        mode: str,
+        path: str = "/",
+        headers: dict[str, str] | None = None,
+        body: bytes = b"",
     ) -> Stream:
         async with self._lock:
             if len(self._streams) >= MAX_STREAMS_PER_CLIENT:
-                raise RuntimeError("Max streams (%d) exceeded" % MAX_STREAMS_PER_CLIENT)
+                raise RuntimeError(
+                    "Max streams (%d) exceeded" % MAX_STREAMS_PER_CLIENT
+                )
             stream_id = self._next_stream_id
             self._next_stream_id += 1
             stream = Stream(stream_id, tunnel_id, mode)
@@ -125,25 +135,34 @@ class StreamMultiplexer:
         await self._send(msg)
         return stream
 
-    async def send_data(self, stream_id: int, data: bytes,
-                        ws_type: str | None = None) -> None:
+    async def send_data(
+        self, stream_id: int, data: bytes, ws_type: str | None = None
+    ) -> None:
         if self._closed:
             raise StreamClosedError("Multiplexer closed")
         for i in range(0, len(data), MAX_CHUNK_SIZE):
-            chunk = data[i:i + MAX_CHUNK_SIZE]
-            await self._send(StreamData(
-                stream_id=stream_id,
-                data=chunk,
-                ws_type=ws_type,
-            ))
+            chunk = data[i : i + MAX_CHUNK_SIZE]
+            await self._send(
+                StreamData(
+                    stream_id=stream_id,
+                    data=chunk,
+                    ws_type=ws_type,
+                )
+            )
 
-    async def send_close(self, stream_id: int, code: int | None = None,
-                          reason: str | None = None) -> None:
-        await self._send(StreamClose(
-            stream_id=stream_id,
-            code=code,
-            reason=reason,
-        ))
+    async def send_close(
+        self,
+        stream_id: int,
+        code: int | None = None,
+        reason: str | None = None,
+    ) -> None:
+        await self._send(
+            StreamClose(
+                stream_id=stream_id,
+                code=code,
+                reason=reason,
+            )
+        )
         self._remove_stream(stream_id)
 
     async def send_reset(self, stream_id: int, reason: str = "") -> None:
@@ -176,8 +195,10 @@ class StreamMultiplexer:
             stream = Stream(msg.stream_id, msg.tunnel_id, msg.mode)
             self._streams[msg.stream_id] = stream
         else:
-            logger.debug("Non-stream message dispatched to multiplexer: %s",
-                          type(msg).__name__)
+            logger.debug(
+                "Non-stream message dispatched to multiplexer: %s",
+                type(msg).__name__,
+            )
 
     def _remove_stream(self, stream_id: int) -> None:
         self._streams.pop(stream_id, None)
