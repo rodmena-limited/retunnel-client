@@ -40,24 +40,26 @@ def _meta(status: int, **extra: object) -> bytes:
 async def _pump_local_to_server(
     ws: aiohttp.ClientWebSocketResponse, sender: Sender
 ) -> tuple[int | None, str | None]:
-    """Relay local messages until the local side closes; returns close info."""
-    async for m in ws:
+    """Relay local messages until the local side closes; returns (code,
+    reason). An explicit receive() loop is used because `async for` stops
+    at a CLOSE frame without yielding it, which would lose the app's close
+    code and reason."""
+    while True:
+        m = await ws.receive()
         if m.type == aiohttp.WSMsgType.TEXT:
             await sender.message(m.data.encode("utf-8"), "text")
         elif m.type == aiohttp.WSMsgType.BINARY:
             await sender.message(m.data, "binary")
         elif m.type == aiohttp.WSMsgType.CLOSE:
-            # aiohttp delivers the peer's close code in .data and the close
-            # reason in .extra; both are relayed to the public caller.
+            # The peer's close code is in .data, the reason in .extra.
             return (
                 int(m.data) if m.data is not None else ws.close_code,
                 str(m.extra) if m.extra else None,
             )
         elif m.type in (aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED):
-            break
+            return ws.close_code, None
         elif m.type == aiohttp.WSMsgType.ERROR:
             raise RuntimeError(f"local websocket error: {ws.exception()}")
-    return ws.close_code, None
 
 
 async def _pump_server_to_local(
