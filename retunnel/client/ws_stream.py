@@ -46,11 +46,14 @@ async def _pump_local_to_server(
             await sender.message(m.data.encode("utf-8"), "text")
         elif m.type == aiohttp.WSMsgType.BINARY:
             await sender.message(m.data, "binary")
-        elif m.type in (
-            aiohttp.WSMsgType.CLOSE,
-            aiohttp.WSMsgType.CLOSING,
-            aiohttp.WSMsgType.CLOSED,
-        ):
+        elif m.type == aiohttp.WSMsgType.CLOSE:
+            # aiohttp delivers the peer's close code in .data and the close
+            # reason in .extra; both are relayed to the public caller.
+            return (
+                int(m.data) if m.data is not None else ws.close_code,
+                str(m.extra) if m.extra else None,
+            )
+        elif m.type in (aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED):
             break
         elif m.type == aiohttp.WSMsgType.ERROR:
             raise RuntimeError(f"local websocket error: {ws.exception()}")
