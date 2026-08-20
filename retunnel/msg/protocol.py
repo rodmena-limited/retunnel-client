@@ -4,6 +4,8 @@ import asyncio
 import logging
 from collections.abc import Callable, Coroutine
 
+from typing_extensions import TypeAlias
+
 from .messages import (
     MAX_CHUNK_SIZE,
     MAX_STREAMS_PER_CLIENT,
@@ -17,6 +19,12 @@ from .messages import (
 )
 
 logger = logging.getLogger(__name__)
+
+# One queued item: (payload, ws_type, fin). See Stream.feed_data.
+Frame: TypeAlias = "tuple[bytes, str | None, bool | None]"
+# End-of-stream marker. A distinct object (not an empty frame) so an empty
+# WebSocket message or an empty chunk is never mistaken for EOF.
+_EOF = None
 
 # Per-stream inbound safety valve. This is NOT the flow-control mechanism --
 # real backpressure is applied by the transport read loop (see
@@ -60,9 +68,13 @@ class Stream:
         self.stream_id = stream_id
         self.tunnel_id = tunnel_id
         self.mode = mode
-        self._inbound: asyncio.Queue[tuple[bytes, str | None]] = (
-            asyncio.Queue()
-        )
+        # Items are (data, ws_type, fin) frames; end-of-stream is the
+        # distinct _EOF sentinel, never an empty frame, so an empty payload
+        # can never be mistaken for EOF (audit #47 G4).
+        self._inbound: asyncio.Queue[Frame | None] = asyncio.Queue()
+        # Frames of a v2 message being reassembled by read_message().
+        self._partial: list[bytes] = []
+        self._partial_type: str | None = None
         self._inbound_bytes = 0
         self._closed = False
         self._aborted = False
@@ -77,13 +89,22 @@ class Stream:
     def buffered_bytes(self) -> int:
         return self._inbound_bytes
 
-    def feed_data(self, data: bytes, ws_type: str | None = None) -> bool:
-        """Queue one chunk. Returns False when closed or past the safety valve."""
+    def feed_data(
+        self,
+        data: bytes,
+        ws_type: str | None = None,
+        fin: bool | None = None,
+    ) -> bool:
+        """Queue one frame. Returns False when closed or past the safety valve.
+
+        `fin` is the v2 framing flag (False: more frames of this message
+        follow, True: last frame, None: v1 -- the frame is a whole unit).
+        """
         if self._closed:
             return False
         if self._inbound_bytes + len(data) > MAX_INBOUND_BYTES:
             return False
-        self._inbound.put_nowait((data, ws_type))
+        self._inbound.put_nowait((data, ws_type, fin))
         self._inbound_bytes += len(data)
         return True
 
@@ -96,12 +117,7 @@ class Stream:
         self._close_code = code
         self._close_reason = reason
         self._close_event.set()
-        try:
-            self._inbound.put_nowait((b"", None))
-        except asyncio.QueueFull:
-            # Buffer already full of data; the reader will observe `closed`
-            # and `empty` after draining and return None.
-            pass
+        self._inbound.put_nowait(_EOF)
 
     def feed_abort(self, reason: str | None = None) -> None:
         """Close the stream ABNORMALLY (peer reset / buffer blowout).
@@ -129,14 +145,54 @@ class Stream:
         if self._inbound_bytes:
             self._release(self._inbound_bytes)
 
-    async def read(self) -> tuple[bytes, str | None] | None:
+    async def read_frame(self) -> Frame | None:
+        """Next raw frame as (data, ws_type, fin), or None at end of stream."""
         if self._closed and self._inbound.empty():
             return None
         item = await self._inbound.get()
-        if self._closed and item == (b"", None):
+        if item is _EOF or item is None:
             return None
         self._release(len(item[0]))
         return item
+
+    async def read(self) -> tuple[bytes, str | None] | None:
+        """Next frame as (data, ws_type), or None at end of stream.
+
+        Frame-level read: a v2 message split across several frames arrives
+        here as several items. Use read_message() when boundaries matter.
+        """
+        frame = await self.read_frame()
+        if frame is None:
+            return None
+        return frame[0], frame[1]
+
+    async def read_message(self) -> tuple[bytes, str | None] | None:
+        """Next complete message, reassembling v2 `fin` framing.
+
+        A v1 frame (fin is None) is a whole message by itself. For v2 frames,
+        data is accumulated until a frame with fin=True. If the stream ends
+        in the middle of a message, the stream is marked aborted and None is
+        returned: a partial message must never be delivered as a whole one.
+        """
+        while True:
+            frame = await self.read_frame()
+            if frame is None:
+                if self._partial:
+                    self._partial = []
+                    self._aborted = True
+                return None
+            data, ws_type, fin = frame
+            if fin is None and not self._partial:
+                return data, ws_type
+            self._partial.append(data)
+            if self._partial_type is None:
+                self._partial_type = ws_type
+            if fin is None or fin:
+                whole = b"".join(self._partial)
+                whole_type = self._partial_type
+                self._partial = []
+                self._partial_type = None
+                return whole, whole_type
 
     async def read_all(self) -> bytes:
         chunks: list[bytes] = []
@@ -181,6 +237,9 @@ class StreamMultiplexer:
         # unbounded server-side Stream objects, because the
         # MAX_STREAMS_PER_CLIENT cap lived only in allocate_stream().
         self._accept_peer_streams = accept_peer_streams
+        # Protocol version negotiated with the peer (messages.PROTOCOL_VERSION
+        # semantics). Decides whether send_data() frames messages with `fin`.
+        self.peer_version = 1
         self._rejected_peer_opens = 0
         self._buffered_bytes = 0
         self._capacity = asyncio.Event()
@@ -269,17 +328,38 @@ class StreamMultiplexer:
         return stream
 
     async def send_data(
-        self, stream_id: int, data: bytes, ws_type: str | None = None
+        self,
+        stream_id: int,
+        data: bytes,
+        ws_type: str | None = None,
+        *,
+        framed: bool | None = None,
     ) -> None:
+        """Send one message, split into MAX_CHUNK_SIZE frames.
+
+        With a v2 peer (`framed`, defaulting to peer_version >= 2) every
+        frame carries `fin` so the receiver reassembles the message; an empty
+        message is one frame with fin=True. With a v1 peer frames carry no
+        `fin` and an empty message sends nothing (its historical behaviour).
+        """
         if self._closed:
             raise StreamClosedError("Multiplexer closed")
-        for i in range(0, len(data), MAX_CHUNK_SIZE):
-            chunk = data[i : i + MAX_CHUNK_SIZE]
+        if framed is None:
+            framed = self.peer_version >= 2
+        chunks = [
+            data[i : i + MAX_CHUNK_SIZE]
+            for i in range(0, len(data), MAX_CHUNK_SIZE)
+        ]
+        if not chunks and framed:
+            chunks = [b""]
+        last = len(chunks) - 1
+        for i, chunk in enumerate(chunks):
             await self._send(
                 StreamData(
                     stream_id=stream_id,
                     data=chunk,
                     ws_type=ws_type,
+                    fin=(i == last) if framed else None,
                 )
             )
 
@@ -302,7 +382,9 @@ class StreamMultiplexer:
         await self._send(StreamReset(stream_id=stream_id, reason=reason))
         stream = self._streams.get(stream_id)
         if stream:
-            stream.feed_close()
+            # A reset is abnormal on our side too: a local reader must not
+            # mistake it for a clean end.
+            stream.feed_abort(reason=reason or "reset")
         self._remove_stream(stream_id)
 
     async def dispatch(self, msg: Message) -> None:
@@ -311,7 +393,7 @@ class StreamMultiplexer:
             if stream is None:
                 logger.debug("Data for unknown stream %d", msg.stream_id)
                 return
-            if stream.feed_data(msg.data, msg.ws_type):
+            if stream.feed_data(msg.data, msg.ws_type, msg.fin):
                 self._account_reserve(len(msg.data))
             elif not stream.closed:
                 # Past the per-stream safety valve. Backpressure should have
@@ -401,10 +483,17 @@ class StreamMultiplexer:
             # read loop would stay paused forever -- a wedged tunnel.
             stream.drain_accounting()
 
-    def close_all(self) -> None:
+    def close_all(self, reason: str = "connection closed") -> None:
+        """Tear down every stream because the CONNECTION is gone.
+
+        Streams are ABORTED, not closed cleanly: a response that was still
+        being relayed has been cut off, and a clean close made proxy_stream
+        finish a short body as if it were complete (audit #47 B3 -- the
+        "Response content shorter than Content-Length" ASGI errors).
+        """
         self._closed = True
         for stream in list(self._streams.values()):
-            stream.feed_close()
+            stream.feed_abort(reason=reason)
             stream.drain_accounting()
         self._streams.clear()
         self._buffered_bytes = 0
