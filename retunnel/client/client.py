@@ -1,24 +1,41 @@
+"""ReTunnelClient: ONE control connection carrying every tunnel of this
+process, supervised by a reconnect loop that redoes the WHOLE handshake
+(connect -> Auth -> every TunnelCreate) after any failure.
+
+The 3.0.x client kept an authenticated socket after a failed TunnelCreate and
+then sat in its message loop answering heartbeats with no tunnel at all
+(audit #47 C1). Here a connection is either fully established -- every
+configured tunnel created -- or torn down and retried with jittered backoff;
+permanent refusals (bad token, unavailable subdomain) end the client with a
+distinct exit code instead of retrying forever (C4).
+"""
+
 from __future__ import annotations
 
 import asyncio
 import logging
+import random
+import ssl
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
-import msgpack
 import websockets
 from websockets.protocol import State
 
 from retunnel.core.exceptions import (
     AuthenticationError,
+    TerminalError,
     TunnelError,
 )
-from retunnel.local_proxy import open_http
+from retunnel.local_proxy import LocalProxy
 from retunnel.msg.messages import (
+    MAX_FRAME_SIZE,
+    PROTOCOL_VERSION,
     Auth,
     Error,
     Heartbeat,
     HeartbeatAck,
+    Message,
     StreamClose,
     StreamData,
     StreamOpen,
@@ -26,14 +43,33 @@ from retunnel.msg.messages import (
     TunnelCreate,
     TunnelCreated,
     deserialize,
+    negotiate_version,
     serialize,
 )
 
+from .http_stream import handle_http_stream
+from .streams import Sender, StreamState
+from .tcp_stream import handle_tcp_stream
+from .ws_stream import handle_ws_stream
+
 logger = logging.getLogger(__name__)
 
-# Per-stream inbound queue cap for server->client data. A local consumer that
-# is slower than the server must not let memory grow without bound.
-MAX_WS_QUEUE_SIZE = 128
+HANDSHAKE_TIMEOUT = 20.0
+MAX_BACKOFF = 60.0
+# SUBDOMAIN_TAKEN is transient while the server evicts this account's stale
+# session; after this many consecutive refusals it is treated as permanent.
+TAKEN_RETRY_BUDGET = 6
+
+# Server error codes that retrying cannot fix -> exit code.
+TERMINAL_CODES: dict[str, int] = {
+    "UNAUTHORIZED": 69,
+    "AUTH_REQUIRED": 69,
+    "SUBDOMAIN_UNAVAILABLE": 69,
+    "PATH_TAKEN": 69,
+    "TCP_DISABLED": 69,
+    "INVALID_PATH": 2,
+    "UNSUPPORTED_PROTOCOL": 2,
+}
 
 
 @dataclass
@@ -76,39 +112,39 @@ class ReTunnelClient:
         # Version-agnostic socket: websockets >= 11 exposes different protocol
         # classes across releases; guarded by _ws_open() at every access site.
         self.ws: Any = None
+        self.protocol_version = 1
         self._running = False
-        self._reconnect_task: asyncio.Task[Any] | None = None
-        self.ws_streams: dict[int, asyncio.Queue[Any]] = {}
-        self._stream_tasks: set[asyncio.Task[Any]] = set()
+        self._supervisor: asyncio.Task[None] | None = None
+        self._configs: list[TunnelConfig] = []
+        self._tunnels: dict[int, Tunnel] = {}
+        self._ready = asyncio.Event()
+        self._wakeup = asyncio.Event()
+        self._failed: TerminalError | None = None
+        self._streams: dict[int, StreamState] = {}
+        self._locals: dict[int, LocalProxy] = {}
+        self._bg: set[asyncio.Task[None]] = set()
 
-    def _track_stream_task(self, task: asyncio.Task[Any]) -> None:
-        self._stream_tasks.add(task)
-        task.add_done_callback(self._stream_tasks.discard)
-
-    def _reset_streams(self) -> None:
-        for task in list(self._stream_tasks):
-            task.cancel()
-        self._stream_tasks.clear()
-        self.ws_streams.clear()
-
+    # ------------------------------------------------------------ public API
     def _ws_open(self) -> bool:
         return self.ws is not None and self.ws.state == State.OPEN
 
-    async def _recv_bytes(self) -> bytes:
-        """Receive a binary frame from the control WebSocket."""
-        data = await self.ws.recv()
-        if isinstance(data, str):
-            return data.encode("utf-8")
-        return cast(bytes, data)
-
     @property
     def is_connected(self) -> bool:
-        return self._ws_open()
+        return self._ws_open() and self._ready.is_set()
 
-    def get_requests(self) -> list[Any]:
-        return []
+    @property
+    def tunnels(self) -> list[Tunnel]:
+        return [self._tunnels[i] for i in sorted(self._tunnels)]
+
+    def add_tunnel(self, config: TunnelConfig) -> int:
+        """Register a tunnel to be created on (re)connect; returns its index."""
+        if self._supervisor is not None:
+            raise TunnelError("tunnels must be added before start()")
+        self._configs.append(config)
+        return len(self._configs) - 1
 
     async def connect(self) -> None:
+        """Obtain a token (anonymous registration) if none is configured."""
         if self.auth_token:
             return
 
@@ -129,426 +165,291 @@ class ReTunnelClient:
         ) as api:
             try:
                 result = await api.register_user()
-                token = result.get("auth_token")
-                if token:
-                    self.auth_token = token
-                    await config_manager.set_auth_token(token)
-                    logger.info(
-                        "Successfully registered and saved auth token."
-                    )
-                else:
-                    raise AuthenticationError(
-                        "No auth token in registration response"
-                    )
             except Exception as e:
                 raise AuthenticationError(
                     f"Failed to register anonymous user: {e}"
                 ) from e
+            token = result.get("auth_token")
+            if not token:
+                raise AuthenticationError(
+                    "No auth token in registration response"
+                )
+            self.auth_token = token
+            await config_manager.set_auth_token(token)
+            logger.info("Successfully registered and saved auth token.")
+
+    async def start(self) -> list[Tunnel]:
+        """Connect and create every registered tunnel; returns them once all
+        are up. Raises TerminalError when the server refuses permanently."""
+        if not self._configs:
+            raise TunnelError("no tunnels configured")
+        if self._supervisor is None:
+            self._running = True
+            self._supervisor = asyncio.ensure_future(self._run())
+        while True:
+            if self._failed is not None:
+                raise self._failed
+            if self._ready.is_set():
+                return self.tunnels
+            await self._wakeup.wait()
+            self._wakeup.clear()
 
     async def request_tunnel(self, config: TunnelConfig) -> Tunnel:
-        self._running = True
-        await self.connect()
+        """Convenience for a single tunnel: add + start."""
+        idx = self.add_tunnel(config)
+        await self.start()
+        return self._tunnels[idx]
 
-        retry_delay = 1.0
-        while self._running:
-            try:
-                self.ws = await websockets.connect(self.server_addr)
-                await self.ws.send(serialize(Auth(token=self.auth_token)))
-                auth_resp = deserialize(await self._recv_bytes())
-                if isinstance(auth_resp, Error):
-                    raise AuthenticationError(
-                        f"Auth failed: {auth_resp.message}"
-                    )
-
-                await self.ws.send(
-                    serialize(
-                        TunnelCreate(
-                            protocol=config.protocol,
-                            subdomain=config.subdomain,
-                            path=(config.path or "") if config.spa else None,
-                            remote_port=config.remote_port,
-                        )
-                    )
-                )
-                tunnel_resp = deserialize(await self._recv_bytes())
-                if isinstance(tunnel_resp, Error):
-                    raise TunnelError(
-                        f"Tunnel creation failed: {tunnel_resp.message}"
-                    )
-                if not isinstance(tunnel_resp, TunnelCreated):
-                    raise TypeError(f"Unexpected response: {tunnel_resp}")
-
-                tunnel = Tunnel(
-                    id=tunnel_resp.subdomain,
-                    url=tunnel_resp.url,
-                    protocol=config.protocol,
-                    config=config,
-                    tunnel_id=tunnel_resp.subdomain,
-                    subdomain=tunnel_resp.subdomain,
-                    path=tunnel_resp.path,
-                )
-
-                self._reconnect_task = asyncio.create_task(
-                    self._reconnect_loop(config, tunnel)
-                )
-                return tunnel
-            except Exception as e:
-                logger.error(f"Connection error: {e}")
-                if not self._running:
-                    raise
-                await asyncio.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, 60.0)
-        raise TunnelError("Tunnel request aborted")
-
-    async def _reconnect_loop(
-        self, config: TunnelConfig, tunnel: Tunnel
-    ) -> None:
-        retry_delay = 1.0
-        while self._running:
-            try:
-                if not self.is_connected:
-                    self.ws = await websockets.connect(self.server_addr)
-                    await self.ws.send(serialize(Auth(token=self.auth_token)))
-                    await self._recv_bytes()
-                    await self.ws.send(
-                        serialize(
-                            TunnelCreate(
-                                protocol=config.protocol,
-                                subdomain=tunnel.subdomain,
-                                path=tunnel.path,
-                                remote_port=config.remote_port,
-                            )
-                        )
-                    )
-                    resp = deserialize(await self._recv_bytes())
-                    if isinstance(resp, Error):
-                        logger.error(
-                            f"Reconnect tunnel creation failed: {resp.message}"
-                        )
-                        raise TunnelError(
-                            f"Tunnel creation failed: {resp.message}"
-                        )
-                    if isinstance(resp, TunnelCreated):
-                        tunnel.url = resp.url
-                        if resp.path:
-                            tunnel.path = resp.path
-                            tunnel.subdomain = resp.subdomain
-
-                retry_delay = 1.0
-                await self._message_loop(config)
-            except Exception as e:
-                logger.error(f"Connection error: {e}")
-
-            if not self._running:
-                break
-
-            await asyncio.sleep(retry_delay)
-            retry_delay = min(retry_delay * 2, 60.0)
-
-    async def _message_loop(self, config: TunnelConfig) -> None:
-        if not self.ws:
-            return
-        try:
-            async for msg_raw in self.ws:
-                msg = deserialize(msg_raw)
-                if isinstance(msg, StreamOpen):
-                    logger.info(
-                        f"StreamOpen received: stream_id={msg.stream_id} "
-                        f"mode={msg.mode} path={msg.path}"
-                    )
-                    self.ws_streams[msg.stream_id] = asyncio.Queue(
-                        maxsize=MAX_WS_QUEUE_SIZE
-                    )
-                    if msg.mode == "ws":
-                        self._track_stream_task(
-                            asyncio.create_task(
-                                self._handle_ws_stream(msg, config.local_port)
-                            )
-                        )
-                    elif msg.mode == "tcp":
-                        self._track_stream_task(
-                            asyncio.create_task(
-                                self._handle_tcp_stream(msg, config.local_port)
-                            )
-                        )
-                    else:
-                        self._track_stream_task(
-                            asyncio.create_task(
-                                self._handle_stream(msg, config.local_port)
-                            )
-                        )
-                elif isinstance(msg, (StreamData, StreamClose, StreamReset)):
-                    queue = self.ws_streams.get(msg.stream_id)
-                    if queue:
-                        try:
-                            queue.put_nowait(msg)
-                        except asyncio.QueueFull:
-                            # Local consumer is slower than the server; reset
-                            # the stream so the server stops sending and
-                            # memory stays bounded.
-                            await self.ws.send(
-                                serialize(
-                                    StreamReset(
-                                        stream_id=msg.stream_id,
-                                        reason="buffer overflow",
-                                    )
-                                )
-                            )
-                            self.ws_streams.pop(msg.stream_id, None)
-                elif isinstance(msg, Heartbeat):
-                    if self._ws_open():
-                        await self.ws.send(serialize(HeartbeatAck()))
-                elif isinstance(msg, Error):
-                    logger.error(f"Server error: {msg.message}")
-        finally:
-            # The control socket is gone: cancel in-flight stream handlers and
-            # drop their queues so reconnect churn cannot accumulate memory.
-            self._reset_streams()
-
-    async def _handle_ws_stream(
-        self, msg: StreamOpen, local_port: int
-    ) -> None:
-        from retunnel.local_proxy import open_ws
-
-        try:
-            local_ws = await open_ws(local_port, msg.path, msg.headers)
-            logger.info(
-                f"local WS connected: port={local_port} path={msg.path}"
-            )
-        except Exception as e:
-            logger.error(f"local WS connect failed: {e}")
-            if self._ws_open():
-                await self.ws.send(
-                    serialize(
-                        StreamReset(stream_id=msg.stream_id, reason=str(e))
-                    )
-                )
-            self.ws_streams.pop(msg.stream_id, None)
-            return
-
-        async def read_from_local() -> None:
-            try:
-                while True:
-                    data, ws_type = await local_ws.recv()
-                    if not self._ws_open():
-                        break
-                    await self.ws.send(
-                        serialize(
-                            StreamData(
-                                stream_id=msg.stream_id,
-                                data=data,
-                                ws_type=ws_type,
-                            )
-                        )
-                    )
-            except websockets.exceptions.ConnectionClosed as e:
-                if self._ws_open():
-                    await self.ws.send(
-                        serialize(
-                            StreamClose(
-                                stream_id=msg.stream_id,
-                                code=e.code,
-                                reason=e.reason,
-                            )
-                        )
-                    )
-            except Exception as e:
-                logger.error(f"Local WS read error: {e}")
-                if self._ws_open():
-                    await self.ws.send(
-                        serialize(
-                            StreamClose(
-                                stream_id=msg.stream_id,
-                                code=1011,
-                                reason=str(e),
-                            )
-                        )
-                    )
-
-        async def read_from_server() -> None:
-            queue = self.ws_streams.get(msg.stream_id)
-            if not queue:
-                return
-            try:
-                while True:
-                    server_msg = await queue.get()
-                    if isinstance(server_msg, StreamData):
-                        ws_type = server_msg.ws_type or "binary"
-                        await local_ws.send(server_msg.data, ws_type)
-                    elif isinstance(server_msg, (StreamClose, StreamReset)):
-                        code = getattr(server_msg, "code", 1000) or 1000
-                        reason = getattr(server_msg, "reason", "") or ""
-                        await local_ws.close(code=code, reason=reason)
-                        break
-            except Exception as e:
-                logger.error(f"Server WS read error: {e}")
-
-        t1 = asyncio.create_task(read_from_local())
-        t2 = asyncio.create_task(read_from_server())
-
-        await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
-
-        if not t1.done():
-            t1.cancel()
-        if not t2.done():
-            t2.cancel()
-
-        try:
-            await local_ws.close()
-        except Exception:
-            logger.debug("Local WS already closed")
-
-        self.ws_streams.pop(msg.stream_id, None)
-
-    async def _handle_tcp_stream(
-        self, msg: StreamOpen, local_port: int
-    ) -> None:
-        try:
-            reader, writer = await asyncio.open_connection(
-                "127.0.0.1", local_port
-            )
-            logger.info(
-                f"TCP stream {msg.stream_id} -> 127.0.0.1:{local_port}"
-            )
-        except Exception as e:
-            logger.error(f"TCP connect failed: {e}")
-            if self._ws_open():
-                await self.ws.send(
-                    serialize(
-                        StreamReset(stream_id=msg.stream_id, reason=str(e))
-                    )
-                )
-            self.ws_streams.pop(msg.stream_id, None)
-            return
-
-        async def read_from_local() -> None:
-            try:
-                while True:
-                    data = await reader.read(65536)
-                    if not data:
-                        break
-                    if not self._ws_open():
-                        break
-                    await self.ws.send(
-                        serialize(
-                            StreamData(stream_id=msg.stream_id, data=data)
-                        )
-                    )
-            except Exception as e:
-                logger.debug(f"TCP local read error: {e}")
-            finally:
-                if self._ws_open():
-                    await self.ws.send(
-                        serialize(StreamClose(stream_id=msg.stream_id))
-                    )
-
-        async def read_from_server() -> None:
-            queue = self.ws_streams.get(msg.stream_id)
-            if not queue:
-                return
-            try:
-                while True:
-                    server_msg = await queue.get()
-                    if isinstance(server_msg, StreamData):
-                        writer.write(server_msg.data)
-                        await writer.drain()
-                    elif isinstance(server_msg, (StreamClose, StreamReset)):
-                        break
-            except Exception as e:
-                logger.debug(f"TCP server read error: {e}")
-
-        t1 = asyncio.create_task(read_from_local())
-        t2 = asyncio.create_task(read_from_server())
-        await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
-
-        if not t1.done():
-            t1.cancel()
-        if not t2.done():
-            t2.cancel()
-
-        writer.close()
-        self.ws_streams.pop(msg.stream_id, None)
-
-    async def _handle_stream(self, msg: StreamOpen, local_port: int) -> None:
-        if msg.mode != "http":
-            return
-
-        method = msg.headers.pop(
-            ":method",
-            msg.headers.pop("method", msg.headers.pop("Method", "GET")),
-        )
-        try:
-            proxy_resp = await open_http(
-                port=local_port,
-                method=method,
-                path=msg.path,
-                headers=msg.headers,
-                body=msg.body,
-            )
-        except Exception as e:
-            if self._ws_open():
-                await self.ws.send(
-                    serialize(
-                        StreamReset(stream_id=msg.stream_id, reason=str(e))
-                    )
-                )
-            self.ws_streams.pop(msg.stream_id, None)
-            return
-
-        closed = asyncio.Event()
-
-        async def watch_server_close() -> None:
-            queue = self.ws_streams.get(msg.stream_id)
-            if not queue:
-                return
-            while True:
-                server_msg = await queue.get()
-                if isinstance(server_msg, (StreamClose, StreamReset)):
-                    closed.set()
-                    break
-
-        watcher = asyncio.create_task(watch_server_close())
-
-        try:
-            if not self._ws_open():
-                return
-
-            meta = {
-                "status": proxy_resp.status_code,
-                "headers": proxy_resp.response_headers,
-            }
-            meta_bytes = msgpack.packb(meta, use_bin_type=True)
-            await self.ws.send(
-                serialize(StreamData(stream_id=msg.stream_id, data=meta_bytes))
-            )
-
-            async for chunk in proxy_resp.iter_chunks():
-                if closed.is_set() or not self._ws_open():
-                    break
-                await self.ws.send(
-                    serialize(StreamData(stream_id=msg.stream_id, data=chunk))
-                )
-
-            if self._ws_open() and not closed.is_set():
-                await self.ws.send(
-                    serialize(StreamClose(stream_id=msg.stream_id))
-                )
-        except Exception as e:
-            logger.error(f"Stream handler error: {e}")
-            if self._ws_open():
-                await self.ws.send(
-                    serialize(
-                        StreamReset(stream_id=msg.stream_id, reason=str(e))
-                    )
-                )
-        finally:
-            watcher.cancel()
-            self.ws_streams.pop(msg.stream_id, None)
-            await proxy_resp.close()
+    async def wait_closed(self) -> int:
+        """Block until the supervisor ends; 0 on close(), else the terminal
+        exit code."""
+        if self._supervisor is not None:
+            await asyncio.gather(self._supervisor, return_exceptions=True)
+        return self._failed.exit_code if self._failed is not None else 0
 
     async def close(self) -> None:
         self._running = False
-        if self._reconnect_task:
-            self._reconnect_task.cancel()
-        if self.ws:
-            await self.ws.close()
+        if self._supervisor is not None and not self._supervisor.done():
+            self._supervisor.cancel()
+            await asyncio.gather(self._supervisor, return_exceptions=True)
+        await self._teardown()
+        for local in self._locals.values():
+            await local.close()
+        self._locals.clear()
+
+    # ------------------------------------------------------------ supervisor
+    async def _run(self) -> None:
+        delay = 1.0
+        taken = 0
+        try:
+            while self._running:
+                try:
+                    await self._handshake()
+                    delay, taken = 1.0, 0
+                    self._ready.set()
+                    self._wakeup.set()
+                    await self._message_loop()
+                    logger.warning("Control connection closed by server")
+                except TerminalError as e:
+                    logger.error("Giving up: %s", e)
+                    self._failed = e
+                    self._running = False
+                except TunnelError as e:
+                    taken += 1
+                    logger.error("Connection error: %s (attempt %d)", e, taken)
+                    if taken > TAKEN_RETRY_BUDGET:
+                        self._failed = TerminalError("SUBDOMAIN_TAKEN", str(e))
+                        self._running = False
+                except Exception as e:
+                    logger.error("Connection error: %s", e)
+                finally:
+                    self._ready.clear()
+                    await self._teardown()
+                    self._wakeup.set()
+                if not self._running:
+                    break
+                wait = delay * (0.5 + random.random())  # jitter, 0.5x..1.5x
+                logger.info("Reconnecting in %.1fs", wait)
+                await asyncio.sleep(wait)
+                delay = min(delay * 2, MAX_BACKOFF)
+        finally:
+            self._wakeup.set()
+
+    def _ssl_kwargs(self) -> dict[str, Any]:
+        if self.ssl_verify or not self.server_addr.startswith("wss://"):
+            return {}
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return {"ssl": ctx}
+
+    async def _recv(self, timeout: float) -> Message:
+        raw = await asyncio.wait_for(self.ws.recv(), timeout=timeout)
+        if isinstance(raw, str):
+            raw = raw.encode("utf-8")
+        return deserialize(raw)
+
+    @staticmethod
+    def _refusal(err: Error) -> Exception:
+        exit_code = TERMINAL_CODES.get(err.code)
+        if exit_code is not None:
+            return TerminalError(err.code, err.message, exit_code)
+        return TunnelError(f"{err.message} [{err.code}]")
+
+    async def _handshake(self) -> None:
+        self.ws = await websockets.connect(
+            self.server_addr,
+            max_size=MAX_FRAME_SIZE,
+            open_timeout=HANDSHAKE_TIMEOUT,
+            **self._ssl_kwargs(),
+        )
+        await self.ws.send(
+            serialize(Auth(token=self.auth_token, version=PROTOCOL_VERSION))
+        )
+        reply = await self._recv(HANDSHAKE_TIMEOUT)
+        if isinstance(reply, Error):
+            raise self._refusal(reply)
+        if not isinstance(reply, HeartbeatAck):
+            raise TunnelError(f"unexpected auth reply: {type(reply).__name__}")
+        self.protocol_version = negotiate_version(reply.version)
+        logger.info("Authenticated (protocol v%d)", self.protocol_version)
+
+        for idx, cfg in enumerate(self._configs):
+            prev = self._tunnels.get(idx)
+            if cfg.spa or (prev is not None and prev.path):
+                create = TunnelCreate(
+                    protocol=cfg.protocol,
+                    path=(
+                        prev.path
+                        if prev is not None and prev.path
+                        else (cfg.path or "")
+                    ),
+                    remote_port=cfg.remote_port,
+                )
+            else:
+                create = TunnelCreate(
+                    protocol=cfg.protocol,
+                    subdomain=(
+                        prev.subdomain if prev is not None else cfg.subdomain
+                    ),
+                    remote_port=cfg.remote_port,
+                )
+            await self.ws.send(serialize(create))
+            reply = await self._recv(HANDSHAKE_TIMEOUT)
+            if isinstance(reply, Error):
+                raise self._refusal(reply)
+            if not isinstance(reply, TunnelCreated):
+                raise TunnelError(f"unexpected reply: {type(reply).__name__}")
+            self._tunnels[idx] = Tunnel(
+                id=reply.subdomain,
+                url=reply.url,
+                protocol=cfg.protocol,
+                config=cfg,
+                tunnel_id=reply.subdomain,
+                subdomain=None if reply.path else reply.subdomain,
+                path=reply.path,
+            )
+            logger.info(
+                "Tunnel ready: %s -> localhost:%d", reply.url, cfg.local_port
+            )
+
+    async def _teardown(self) -> None:
+        tasks = [s.task for s in self._streams.values() if s.task is not None]
+        self._streams.clear()
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        ws, self.ws = self.ws, None
+        if ws is not None:
+            try:
+                await ws.close()
+            except Exception:
+                logger.debug("closing control socket failed", exc_info=True)
+
+    # ---------------------------------------------------------- message loop
+    async def _send_raw(self, data: bytes) -> None:
+        if not self._ws_open():
+            raise ConnectionError("control connection is down")
+        await self.ws.send(data)
+
+    async def _message_loop(self) -> None:
+        async for raw in self.ws:
+            try:
+                msg = deserialize(
+                    raw if isinstance(raw, bytes) else raw.encode()
+                )
+            except Exception as e:
+                # One bad frame must never take down every stream.
+                logger.warning("Ignoring undecodable frame: %s", e)
+                continue
+            if isinstance(msg, StreamOpen):
+                self._on_open(msg)
+            elif isinstance(msg, (StreamData, StreamClose, StreamReset)):
+                self._on_frame(msg)
+            elif isinstance(msg, Heartbeat):
+                await self._send_raw(serialize(HeartbeatAck()))
+            elif isinstance(msg, Error):
+                logger.error("Server error %s: %s", msg.code, msg.message)
+
+    def _config_for(self, tunnel_id: str) -> TunnelConfig:
+        for t in self._tunnels.values():
+            if tunnel_id in (t.tunnel_id, t.subdomain, t.path):
+                return t.config
+        return self._configs[0]
+
+    def _local_for(self, port: int) -> LocalProxy:
+        local = self._locals.get(port)
+        if local is None:
+            local = self._locals[port] = LocalProxy(port)
+        return local
+
+    def _on_open(self, msg: StreamOpen) -> None:
+        logger.debug(
+            "StreamOpen stream_id=%d mode=%s path=%s",
+            msg.stream_id,
+            msg.mode,
+            msg.path,
+        )
+        state = StreamState(msg.stream_id)
+        self._streams[msg.stream_id] = state
+        sender = Sender(
+            self._send_raw, msg.stream_id, self.protocol_version >= 2
+        )
+        cfg = self._config_for(msg.tunnel_id)
+        if msg.mode == "ws":
+            coro = handle_ws_stream(
+                msg, state, sender, self._local_for(cfg.local_port), cfg.auth
+            )
+        elif msg.mode == "tcp":
+            coro = handle_tcp_stream(msg, state, sender, cfg.local_port)
+        else:
+            coro = handle_http_stream(
+                msg, state, sender, self._local_for(cfg.local_port), cfg.auth
+            )
+        state.task = asyncio.ensure_future(self._guard(coro, state, sender))
+
+    async def _guard(
+        self, coro: Any, state: StreamState, sender: Sender
+    ) -> None:
+        try:
+            await coro
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error("stream %d handler failed: %s", state.stream_id, e)
+            try:
+                await sender.reset(f"{type(e).__name__}: {e}")
+            except Exception:
+                logger.debug(
+                    "stream %d: reset not delivered",
+                    state.stream_id,
+                    exc_info=True,
+                )
+        finally:
+            self._streams.pop(state.stream_id, None)
+
+    def _on_frame(self, msg: Any) -> None:
+        state = self._streams.get(msg.stream_id)
+        if state is None:
+            logger.debug("frame for unknown stream %d", msg.stream_id)
+            return
+        try:
+            state.queue.put_nowait(msg)
+        except asyncio.QueueFull:
+            # Local consumer slower than the server: drop this stream only.
+            logger.warning(
+                "stream %d: local consumer too slow; resetting", msg.stream_id
+            )
+            self._streams.pop(msg.stream_id, None)
+            if state.task is not None:
+                state.task.cancel()
+            task = asyncio.ensure_future(
+                self._send_raw(
+                    serialize(
+                        StreamReset(msg.stream_id, reason="buffer overflow")
+                    )
+                )
+            )
+            self._bg.add(task)
+            task.add_done_callback(self._bg.discard)

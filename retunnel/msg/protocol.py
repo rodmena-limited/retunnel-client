@@ -9,6 +9,7 @@ from typing_extensions import TypeAlias
 from .messages import (
     MAX_CHUNK_SIZE,
     MAX_STREAMS_PER_CLIENT,
+    Headers,
     Message,
     StreamClose,
     StreamData,
@@ -302,9 +303,18 @@ class StreamMultiplexer:
         tunnel_id: str,
         mode: str,
         path: str = "/",
-        headers: dict[str, str] | None = None,
+        headers: Headers | None = None,
         body: bytes = b"",
+        *,
+        method: str | None = None,
+        has_body: bool | None = None,
     ) -> Stream:
+        """Register a new stream and send its StreamOpen.
+
+        `headers` is a dict for a v1 peer or a list of [name, value] pairs
+        for a v2 peer; `method`/`has_body` are the v2 fields (left unset for
+        a v1 peer so they never appear on the wire).
+        """
         async with self._lock:
             if len(self._streams) >= MAX_STREAMS_PER_CLIENT:
                 raise RuntimeError(
@@ -321,11 +331,32 @@ class StreamMultiplexer:
             tunnel_id=tunnel_id,
             mode=mode,
             path=path,
-            headers=headers or {},
+            headers=headers if headers is not None else {},
             body=body,
+            method=method,
+            has_body=has_body,
         )
         await self._send(msg)
         return stream
+
+    async def send_frame(
+        self,
+        stream_id: int,
+        data: bytes,
+        ws_type: str | None = None,
+        *,
+        fin: bool | None,
+    ) -> None:
+        """Send ONE frame of a message (used to stream a body whose total
+        size is not known up front: fin=False per chunk, then an empty frame
+        with fin=True)."""
+        if self._closed:
+            raise StreamClosedError("Multiplexer closed")
+        await self._send(
+            StreamData(
+                stream_id=stream_id, data=data, ws_type=ws_type, fin=fin
+            )
+        )
 
     async def send_data(
         self,
@@ -354,13 +385,11 @@ class StreamMultiplexer:
             chunks = [b""]
         last = len(chunks) - 1
         for i, chunk in enumerate(chunks):
-            await self._send(
-                StreamData(
-                    stream_id=stream_id,
-                    data=chunk,
-                    ws_type=ws_type,
-                    fin=(i == last) if framed else None,
-                )
+            await self.send_frame(
+                stream_id,
+                chunk,
+                ws_type,
+                fin=(i == last) if framed else None,
             )
 
     async def send_close(

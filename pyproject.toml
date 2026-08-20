@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "retunnel"
-version = "3.0.3"
+version = "3.1.0"
 description = "ReTunnel - Securely expose local servers to the internet"
 authors = [{name = "ReTunnel Team", email = "support@retunnel.com"}]
 license = "MIT"
@@ -12,8 +12,13 @@ readme = "README.md"
 keywords = ["tunnel", "ngrok", "localhost", "webhook", "http", "https", "tcp", "reverse-proxy"]
 requires-python = ">=3.9"
 dependencies = [
-    "aiohttp>=3.8.0",
-    "websockets>=11.0",
+    "aiohttp>=3.9.0",
+    "multidict>=6.0.0",
+    "yarl>=1.9.0",
+    # The control connection uses the asyncio client that became the default
+    # in 14.0 (max_size/open_timeout/ssl keywords); older releases had a
+    # different connect() signature (audit #47 D6).
+    "websockets>=14.0",
     "msgpack>=1.0.0",
     "click>=8.0.0",
     "pyyaml>=6.0",
@@ -60,7 +65,7 @@ dev = [
 retunnel = "retunnel.client.cli:cli"
 
 [tool.pytest.ini_options]
-minversion = "3.0.3"
+minversion = "7.0"
 addopts = [
     "-ra",
     "-q",
@@ -165,6 +170,12 @@ ignore = ["E501"]  # line length is black's job
 # always surface a clean error message and a non-zero exit code.
 "retunnel/client/client.py" = ["BLE001"]
 "retunnel/client/cli.py" = ["BLE001"]
+"retunnel/client/runner.py" = ["BLE001"]
+# Stream handlers relay untrusted local apps over the network: any failure
+# must end THAT stream (with a logged reset), never the process.
+"retunnel/client/http_stream.py" = ["BLE001"]
+"retunnel/client/ws_stream.py" = ["BLE001"]
+"retunnel/client/tcp_stream.py" = ["BLE001"]
 "retunnel/core/exceptions.py" = ["BLE001"]
 # Pydantic v2 evaluates BaseModel annotations at runtime; `X | None` raises
 # TypeError on Python 3.9, which this package still supports. Keep Optional[]

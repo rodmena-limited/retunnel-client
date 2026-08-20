@@ -10,7 +10,6 @@ import asyncio
 import json
 import logging
 import os
-import signal
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, TextIO
@@ -20,15 +19,15 @@ import yaml
 
 from .. import __version__
 from ..core.config import AuthConfig, ClientConfig
-from .client import ReTunnelClient, TunnelConfig
-from .config_manager import config_manager
-
-# Exit codes following Unix conventions
-EXIT_SUCCESS = 0
-EXIT_ERROR = 1
-EXIT_USAGE = 2
-EXIT_UNAVAILABLE = 69  # EX_UNAVAILABLE - service unavailable
-
+from .client import TunnelConfig
+from .runner import (
+    EXIT_ERROR,
+    EXIT_SUCCESS,
+    EXIT_USAGE,
+    echo_stderr,
+    echo_stdout,
+    run_tunnels,
+)
 
 if TYPE_CHECKING:
     # logging.StreamHandler is generic to type checkers but is NOT subscriptable
@@ -59,16 +58,17 @@ def setup_logging(
     # Clear existing handlers
     logger.handlers.clear()
 
-    if not quiet:
-        console = FlushingStreamHandler(sys.stderr)
-        console.setLevel(level.upper())
-        console.setFormatter(
-            logging.Formatter(
-                "%(asctime)s [%(levelname)s] %(message)s",
-                datefmt="%H:%M:%S",
-            )
+    # --quiet/--json suppress chatter, never errors: a scripted user must
+    # still see a reconnect failure or a refused subdomain on stderr.
+    console = FlushingStreamHandler(sys.stderr)
+    console.setLevel(logging.WARNING if quiet else level.upper())
+    console.setFormatter(
+        logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%H:%M:%S",
         )
-        logger.addHandler(console)
+    )
+    logger.addHandler(console)
 
     if log_file:
         file_handler = logging.FileHandler(log_file)
@@ -82,18 +82,6 @@ def setup_logging(
         logger.addHandler(file_handler)
 
     return logger
-
-
-def echo_stderr(message: str) -> None:
-    """Echo to stderr (for status messages)."""
-    click.echo(message, err=True)
-
-
-def echo_stdout(message: str, flush: bool = True) -> None:
-    """Echo to stdout (for primary output like URLs)."""
-    click.echo(message, err=False)
-    if flush:
-        sys.stdout.flush()
 
 
 class Context:
@@ -227,19 +215,29 @@ def http(
     """Create an HTTP tunnel to expose a local port."""
     logger = setup_logging(ctx.log_level, ctx.log_file, ctx.quiet)
 
+    if hostname:
+        # Accepted-and-ignored flags are worse than refused ones (audit #47).
+        echo_stderr(
+            "Error: --hostname is not supported by this server; "
+            "omit it, or use --subdomain for a name your account owns"
+        )
+        sys.exit(EXIT_USAGE)
+    if auth and ":" not in auth:
+        echo_stderr("Error: --auth must be USER:PASS")
+        sys.exit(EXIT_USAGE)
+
     config = TunnelConfig(
         protocol="http",
         local_port=port,
         subdomain=subdomain,
         spa=spa,
-        hostname=hostname,
         auth=auth,
         inspect=True,
     )
 
     exit_code = asyncio.run(
-        _run_tunnel(
-            config,
+        run_tunnels(
+            [config],
             server,
             token,
             ssl_verify=not insecure,
@@ -298,8 +296,8 @@ def tcp(
     )
 
     exit_code = asyncio.run(
-        _run_tunnel(
-            config,
+        run_tunnels(
+            [config],
             server,
             token,
             ssl_verify=not insecure,
@@ -325,9 +323,30 @@ def start(ctx: Context, config_path: Path) -> None:
 
     try:
         config = ClientConfig.from_yaml(config_path)
+        configs = [
+            TunnelConfig(
+                protocol=t.protocol,
+                local_port=t.local_port,
+                name=t.name,
+                subdomain=t.subdomain,
+                auth=t.auth,
+                inspect=t.inspect,
+            )
+            for t in config.tunnels
+        ]
+        if any(t.hostname for t in config.tunnels):
+            echo_stderr("Error: 'hostname' is not supported by this server")
+            sys.exit(EXIT_USAGE)
+        if not configs:
+            echo_stderr(f"Error: no tunnels defined in {config_path}")
+            sys.exit(EXIT_USAGE)
+        # All tunnels ride ONE control connection and are re-created together
+        # on reconnect (audit #47 G3).
         exit_code = asyncio.run(
-            _run_from_config(
-                config,
+            run_tunnels(
+                configs,
+                server=config.server_addr,
+                token=config.auth_token,
                 quiet=ctx.quiet,
                 json_output=ctx.json_output,
                 logger=logger,
@@ -459,169 +478,6 @@ def credits() -> None:
         echo_stderr(f"  {package:<15} {license_name:<12} {desc}")
     echo_stderr("")
     echo_stderr("Source: https://github.com/anthropics/retunnel")
-
-
-async def _run_tunnel(
-    config: TunnelConfig,
-    server: str | None = None,
-    token: str | None = None,
-    ssl_verify: bool = True,
-    quiet: bool = False,
-    json_output: bool = False,
-    logger: logging.Logger | None = None,
-) -> int:
-    """Run a single tunnel."""
-    if logger is None:
-        logger = logging.getLogger("retunnel")
-
-    if not token:
-        token = await config_manager.get_auth_token()
-
-    client = ReTunnelClient(
-        server_addr=server or "wss://retunnel.net",
-        auth_token=token or "",
-        ssl_verify=ssl_verify,
-    )
-
-    shutdown_event = asyncio.Event()
-    loop = asyncio.get_event_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, shutdown_event.set)
-        except NotImplementedError:
-            pass
-
-    try:
-        if not quiet:
-            echo_stderr("Connecting to ReTunnel server...")
-
-        await client.connect()
-        tunnel = await client.request_tunnel(config)
-
-        if json_output:
-            echo_stdout(
-                json.dumps(
-                    {
-                        "url": tunnel.url,
-                        "protocol": config.protocol,
-                        "local_port": config.local_port,
-                        "subdomain": tunnel.subdomain,
-                    }
-                )
-            )
-        else:
-            echo_stdout(tunnel.url)
-            if not quiet:
-                echo_stderr("")
-                echo_stderr(
-                    f"Forwarding {tunnel.url} -> localhost:{config.local_port}"
-                )
-                echo_stderr("")
-                echo_stderr("Press Ctrl+C to stop")
-                echo_stderr("-" * 40)
-
-        await shutdown_event.wait()
-    except Exception as e:
-        echo_stderr(f"Error: {e}")
-        return EXIT_ERROR
-    finally:
-        if not quiet:
-            echo_stderr("\nShutting down...")
-        await client.close()
-        if not quiet:
-            echo_stderr("Tunnel closed.")
-
-    return EXIT_SUCCESS
-
-
-async def _run_from_config(
-    config: ClientConfig,
-    quiet: bool = False,
-    json_output: bool = False,
-    logger: logging.Logger | None = None,
-) -> int:
-    """Run tunnels from configuration file."""
-    if logger is None:
-        logger = logging.getLogger("retunnel")
-
-    client = ReTunnelClient(
-        config.server_addr, auth_token=config.auth_token or ""
-    )
-    shutdown_event = asyncio.Event()
-
-    def signal_handler() -> None:
-        shutdown_event.set()
-
-    loop = asyncio.get_event_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, signal_handler)
-        except NotImplementedError:
-            pass
-
-    try:
-        if not quiet:
-            echo_stderr(f"Connecting to {config.server_addr}...")
-        await client.connect()
-
-        tunnels = []
-        for tunnel_def in config.tunnels:
-            if not quiet:
-                echo_stderr(f"Starting tunnel '{tunnel_def.name}'...")
-
-            tunnel_config = TunnelConfig(
-                protocol=tunnel_def.protocol,
-                local_port=tunnel_def.local_port,
-                subdomain=tunnel_def.subdomain,
-                hostname=tunnel_def.hostname,
-                auth=tunnel_def.auth,
-                inspect=tunnel_def.inspect,
-            )
-
-            tunnel = await client.request_tunnel(tunnel_config)
-            tunnels.append((tunnel_def.name, tunnel, tunnel_config))
-
-        if json_output:
-            output = {
-                "tunnels": [
-                    {
-                        "name": name,
-                        "url": t.url,
-                        "local_port": tc.local_port,
-                        "protocol": tc.protocol,
-                    }
-                    for name, t, tc in tunnels
-                ]
-            }
-            echo_stdout(json.dumps(output))
-        else:
-            for name, tunnel, _ in tunnels:
-                echo_stdout(f"{name}={tunnel.url}")
-
-            if not quiet:
-                echo_stderr("")
-                echo_stderr(f"Active Tunnels ({len(tunnels)}):")
-                echo_stderr("-" * 40)
-                for name, tunnel, tc in tunnels:
-                    echo_stderr(
-                        f"  {name}: {tunnel.url} -> localhost:{tc.local_port}"
-                    )
-                echo_stderr("")
-                echo_stderr("Press Ctrl+C to stop all tunnels")
-
-        await shutdown_event.wait()
-
-        return EXIT_SUCCESS
-
-    except Exception as e:
-        echo_stderr(f"Error: {e}")
-        return EXIT_ERROR
-    finally:
-        if not quiet:
-            echo_stderr("\nShutting down all tunnels...")
-        await client.close()
-        if not quiet:
-            echo_stderr("All tunnels closed.")
 
 
 def main() -> None:

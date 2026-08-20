@@ -19,7 +19,20 @@ class AuthenticationError(ReTunnelError):
 
 
 class TunnelError(ReTunnelError):
-    """Tunnel creation/management errors."""
+    """Tunnel creation/management errors (transient: the client retries)."""
+
+
+class TerminalError(ReTunnelError):
+    """The server refused permanently; retrying cannot help.
+
+    Carries the process exit code the CLI should use (69 EX_UNAVAILABLE for
+    auth/availability refusals, 2 EX_USAGE for invalid requests).
+    """
+
+    def __init__(self, code: str, message: str, exit_code: int = 69) -> None:
+        super().__init__(f"{message} [{code}]")
+        self.code = code
+        self.exit_code = exit_code
 
 
 class ConfigurationError(ReTunnelError):
