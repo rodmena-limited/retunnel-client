@@ -55,10 +55,13 @@ from .ws_stream import handle_ws_stream
 logger = logging.getLogger(__name__)
 
 HANDSHAKE_TIMEOUT = 20.0
+# How long to wait for the peer's WebSocket close handshake on shutdown.
+CLOSE_TIMEOUT = 2.0
 MAX_BACKOFF = 60.0
-# SUBDOMAIN_TAKEN is transient while the server evicts this account's stale
-# session; after this many consecutive refusals it is treated as permanent.
-TAKEN_RETRY_BUDGET = 6
+# A refusal the server calls transient (SUBDOMAIN_TAKEN while it evicts this
+# account's stale session, TUNNEL_CREATE_FAILED while the allocator is
+# contended) is retried this many times before the client gives up.
+RETRY_BUDGET = 6
 
 # Server error codes that retrying cannot fix -> exit code.
 TERMINAL_CODES: dict[str, int] = {
@@ -220,12 +223,12 @@ class ReTunnelClient:
     # ------------------------------------------------------------ supervisor
     async def _run(self) -> None:
         delay = 1.0
-        taken = 0
+        attempts = 0
         try:
             while self._running:
                 try:
                     await self._handshake()
-                    delay, taken = 1.0, 0
+                    delay, attempts = 1.0, 0
                     self._ready.set()
                     self._wakeup.set()
                     await self._message_loop()
@@ -235,10 +238,17 @@ class ReTunnelClient:
                     self._failed = e
                     self._running = False
                 except TunnelError as e:
-                    taken += 1
-                    logger.error("Connection error: %s (attempt %d)", e, taken)
-                    if taken > TAKEN_RETRY_BUDGET:
-                        self._failed = TerminalError("SUBDOMAIN_TAKEN", str(e))
+                    attempts += 1
+                    logger.error(
+                        "Connection error: %s (attempt %d)", e, attempts
+                    )
+                    if attempts > RETRY_BUDGET:
+                        # Keep the server's own message; relabelling every
+                        # exhausted-budget failure as SUBDOMAIN_TAKEN reported
+                        # the wrong cause (issuedb #58).
+                        self._failed = TerminalError(
+                            "RETRY_BUDGET_EXHAUSTED", str(e)
+                        )
                         self._running = False
                 except Exception as e:
                     logger.error("Connection error: %s", e)
@@ -343,7 +353,12 @@ class ReTunnelClient:
         ws, self.ws = self.ws, None
         if ws is not None:
             try:
-                await ws.close()
+                # Bounded: ws.close() waits for the peer's close handshake
+                # (10s by default in websockets), which made Ctrl-C take
+                # more than 8 seconds against an unresponsive server.
+                await asyncio.wait_for(ws.close(), timeout=CLOSE_TIMEOUT)
+            except (TimeoutError, asyncio.TimeoutError):
+                logger.debug("control socket close timed out; abandoning it")
             except Exception:
                 logger.debug("closing control socket failed", exc_info=True)
 

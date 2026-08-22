@@ -122,10 +122,23 @@ async def run_tunnels(
         await client.connect()
         for cfg in configs:
             client.add_tunnel(cfg)
-        await client.start()
+
+        # Race the first connection against Ctrl-C. The signal handler only
+        # sets an event and start() waits on its own, so while the server was
+        # unreachable the client ignored SIGINT/SIGTERM entirely and had to be
+        # SIGKILLed -- exactly when a user is most likely to interrupt it
+        # (issuedb #58).
+        stop = asyncio.ensure_future(shutdown_event.wait())
+        started = asyncio.ensure_future(client.start())
+        waiters = [stop, started]
+        done, _ = await asyncio.wait(
+            waiters, return_when=asyncio.FIRST_COMPLETED
+        )
+        if started not in done:
+            return EXIT_SUCCESS  # interrupted before any tunnel came up
+        started.result()  # re-raise a terminal refusal
         _print_tunnels(client, json_output, quiet)
 
-        stop = asyncio.ensure_future(shutdown_event.wait())
         ended = asyncio.ensure_future(client.wait_closed())
         waiters = [stop, ended]
         done, _ = await asyncio.wait(
