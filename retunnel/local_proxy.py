@@ -18,6 +18,27 @@ from yarl import URL
 # not send them; the local app must see the caller's request, not ours.
 _SKIP_AUTO = frozenset({"Accept", "Accept-Encoding", "User-Agent"})
 
+# Loopback addresses tried, in order, when reaching the local application.
+#
+# Hardcoding 127.0.0.1 meant an app the user could browse at
+# http://localhost:PORT answered 502 through the tunnel whenever it was bound
+# to ::1 -- the common case on macOS, where localhost resolves to ::1 first and
+# many dev servers bind IPv6 only (issuedb #59).
+#
+# Resolving the NAME "localhost" is NOT a fix: it depends on the host's
+# /etc/hosts, and where localhost has no AAAA record (this build machine)
+# getaddrinfo returns 127.0.0.1 alone and an IPv6-only app stays unreachable.
+# Both literals are therefore tried explicitly, IPv4 first as the common case;
+# whichever answers is remembered for the rest of the session.
+LOCAL_HOSTS = ("127.0.0.1", "::1")
+# The name used in logs and messages.
+LOCAL_HOST = "localhost"
+
+
+def _authority(host: str, port: int) -> str:
+    """host:port, bracketing an IPv6 literal as a URL requires."""
+    return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+
 
 class LocalProxyResponse:
     def __init__(self, resp: aiohttp.ClientResponse) -> None:
@@ -41,11 +62,14 @@ class LocalProxyResponse:
 
 
 class LocalProxy:
-    """Connections to the local application on 127.0.0.1:<port>."""
+    """Connections to the local application on localhost:<port>."""
 
     def __init__(self, port: int) -> None:
         self.port = port
         self._session: aiohttp.ClientSession | None = None
+        # The loopback address that last worked, so only the first request of
+        # a session pays for probing both families.
+        self._host: str | None = None
 
     def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -57,10 +81,17 @@ class LocalProxy:
             )
         return self._session
 
-    def url(self, target: str, scheme: str = "http") -> URL:
+    def hosts(self) -> tuple[str, ...]:
+        """Loopback addresses to try, best-known first."""
+        if self._host is not None:
+            return (self._host,)
+        return LOCAL_HOSTS
+
+    def url(self, target: str, scheme: str = "http", host: str = "") -> URL:
         if not target.startswith("/"):
             target = "/" + target
-        return URL(f"{scheme}://127.0.0.1:{self.port}{target}", encoded=True)
+        authority = _authority(host or self.hosts()[0], self.port)
+        return URL(f"{scheme}://{authority}{target}", encoded=True)
 
     async def open_http(
         self,
@@ -69,15 +100,23 @@ class LocalProxy:
         headers: list[tuple[str, str]],
         body: bytes,
     ) -> LocalProxyResponse:
-        resp = await self._get_session().request(
-            method,
-            self.url(target),
-            headers=CIMultiDict(headers),
-            data=body if body else None,
-            allow_redirects=False,
-            skip_auto_headers=_SKIP_AUTO,
-        )
-        return LocalProxyResponse(resp)
+        last: Exception | None = None
+        for host in self.hosts():
+            try:
+                resp = await self._get_session().request(
+                    method,
+                    self.url(target, host=host),
+                    headers=CIMultiDict(headers),
+                    data=body if body else None,
+                    allow_redirects=False,
+                    skip_auto_headers=_SKIP_AUTO,
+                )
+            except aiohttp.ClientConnectorError as e:
+                last = e  # nothing listening on this family; try the other
+                continue
+            self._host = host
+            return LocalProxyResponse(resp)
+        raise last if last is not None else RuntimeError("no loopback address")
 
     async def open_ws(
         self,
@@ -87,14 +126,23 @@ class LocalProxy:
     ) -> aiohttp.ClientWebSocketResponse:
         """Upgrade to the local app. Raises aiohttp.WSServerHandshakeError
         (with .status and .headers) when the app refuses the upgrade."""
-        return await self._get_session().ws_connect(
-            self.url(target, "ws"),
-            headers=CIMultiDict(headers),
-            protocols=subprotocols,
-            autoping=True,
-            max_msg_size=0,
-            compress=0,
-        )
+        last: Exception | None = None
+        for host in self.hosts():
+            try:
+                ws = await self._get_session().ws_connect(
+                    self.url(target, "ws", host=host),
+                    headers=CIMultiDict(headers),
+                    protocols=subprotocols,
+                    autoping=True,
+                    max_msg_size=0,
+                    compress=0,
+                )
+            except aiohttp.ClientConnectorError as e:
+                last = e
+                continue
+            self._host = host
+            return ws
+        raise last if last is not None else RuntimeError("no loopback address")
 
     async def close(self) -> None:
         if self._session is not None and not self._session.closed:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from retunnel.local_proxy import LOCAL_HOST, LOCAL_HOSTS
 from retunnel.msg.messages import StreamOpen
 
 from .streams import Sender, StreamState
@@ -15,11 +16,24 @@ logger = logging.getLogger(__name__)
 async def handle_tcp_stream(
     msg: StreamOpen, state: StreamState, sender: Sender, port: int
 ) -> None:
-    try:
-        reader, writer = await asyncio.open_connection("127.0.0.1", port)
-    except Exception as e:
-        logger.warning("TCP connect to 127.0.0.1:%d failed: %s", port, e)
-        await sender.reset(f"{type(e).__name__}: {e}")
+    reader = None
+    writer = None
+    last: Exception | None = None
+    for host in LOCAL_HOSTS:
+        try:
+            reader, writer = await asyncio.open_connection(host, port)
+            break
+        except OSError as e:  # nothing listening on this family
+            last = e
+    if reader is None or writer is None:
+        logger.warning(
+            "TCP connect to %s:%d failed on %s: %s",
+            LOCAL_HOST,
+            port,
+            "/".join(LOCAL_HOSTS),
+            last,
+        )
+        await sender.reset(f"{type(last).__name__}: {last}")
         return
 
     async def local_to_server() -> None:
