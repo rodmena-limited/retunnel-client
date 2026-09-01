@@ -198,9 +198,17 @@ def hostname_verify(name: str, as_json: bool) -> None:
     if body.get("dns_points_at_retunnel") is False:
         click.echo(f"WARNING: {body.get('dns_hint')}", err=True)
     if not body.get("certificate"):
+        # Do NOT say "a certificate is being issued". Nothing is: issuance
+        # needs root on the server and starts only when an operator runs it.
+        # The old wording described an automatic transition that does not
+        # exist, so a self-service user polled `hostname list` forever against
+        # certificate:false / certificate_error:null with no way to learn the
+        # next move was not theirs (issuedb #62, reported by pi-9b165e).
         click.echo(
-            "A TLS certificate is being issued; run "
-            "`retunnel hostname list` until it shows 'ready'."
+            "\nNo TLS certificate yet, and issuance has NOT started: it is an\n"
+            "operator step, not an automatic one. Ask the ReTunnel operator to\n"
+            f"provision {host}, then `retunnel hostname list` will show 'ready'.\n"
+            "Until then the hostname cannot be used with --hostname."
         )
 
 
