@@ -19,19 +19,19 @@ from retunnel.core.config import (
 class TestGetConfigDir:
     """Test get_config_dir function."""
 
-    def test_default_config_dir(self):
+    def test_default_config_dir(self) -> None:
         """Test default config directory."""
         with patch.dict(os.environ, {}, clear=True):
             config_dir = get_config_dir()
             assert config_dir == Path.home() / ".retunnel"
 
-    def test_custom_config_dir_from_env(self):
+    def test_custom_config_dir_from_env(self) -> None:
         """Test custom config directory from environment."""
         with patch.dict(os.environ, {"RETUNNEL_CONFIG_DIR": "/custom/config"}):
             config_dir = get_config_dir()
             assert config_dir == Path("/custom/config")
 
-    def test_empty_env_var(self):
+    def test_empty_env_var(self) -> None:
         """Test empty environment variable falls back to default."""
         with patch.dict(os.environ, {"RETUNNEL_CONFIG_DIR": ""}):
             config_dir = get_config_dir()
@@ -41,7 +41,7 @@ class TestGetConfigDir:
 class TestTunnelDefinition:
     """Test TunnelDefinition model."""
 
-    def test_basic_tunnel(self):
+    def test_basic_tunnel(self) -> None:
         """Test creating basic tunnel definition."""
         tunnel = TunnelDefinition(name="web", protocol="http", local_port=8080)
         assert tunnel.name == "web"
@@ -52,7 +52,7 @@ class TestTunnelDefinition:
         assert tunnel.auth is None
         assert tunnel.inspect is True
 
-    def test_full_tunnel(self):
+    def test_full_tunnel(self) -> None:
         """Test tunnel with all fields."""
         tunnel = TunnelDefinition(
             name="api",
@@ -71,7 +71,7 @@ class TestTunnelDefinition:
         assert tunnel.auth == "user:pass"
         assert tunnel.inspect is False
 
-    def test_protocol_validation_valid(self):
+    def test_protocol_validation_valid(self) -> None:
         """Test valid protocol values."""
         for protocol in ["http", "tcp"]:
             tunnel = TunnelDefinition(
@@ -79,13 +79,13 @@ class TestTunnelDefinition:
             )
             assert tunnel.protocol == protocol
 
-    def test_protocol_validation_invalid(self):
+    def test_protocol_validation_invalid(self) -> None:
         """Test invalid protocol values."""
         with pytest.raises(ValidationError) as exc_info:
             TunnelDefinition(name="invalid", protocol="udp", local_port=8080)
         assert "Unsupported protocol: udp" in str(exc_info.value)
 
-    def test_model_dump(self):
+    def test_model_dump(self) -> None:
         """Test model serialization."""
         tunnel = TunnelDefinition(
             name="test", protocol="http", local_port=8080, subdomain="test"
@@ -100,7 +100,7 @@ class TestTunnelDefinition:
 class TestClientConfig:
     """Test ClientConfig model."""
 
-    def test_default_config(self):
+    def test_default_config(self) -> None:
         """Test default configuration values."""
         config = ClientConfig()
         assert config.server_addr == "localhost:6400"
@@ -109,7 +109,7 @@ class TestClientConfig:
         assert config.log_level == "INFO"
         assert config.tunnels == []
 
-    def test_custom_config(self):
+    def test_custom_config(self) -> None:
         """Test custom configuration values."""
         tunnel = TunnelDefinition(name="web", protocol="http", local_port=8080)
         config = ClientConfig(
@@ -126,7 +126,7 @@ class TestClientConfig:
         assert len(config.tunnels) == 1
         assert config.tunnels[0].name == "web"
 
-    def test_env_var_override(self):
+    def test_env_var_override(self) -> None:
         """Test environment variable override."""
         with patch.dict(
             os.environ,
@@ -143,7 +143,7 @@ class TestClientConfig:
             assert config.region == "eu-west"
             assert config.log_level == "WARNING"
 
-    def test_from_yaml(self, tmp_path):
+    def test_from_yaml(self, tmp_path: Path) -> None:
         """Test loading configuration from YAML file."""
         yaml_content = """
 server_addr: yaml.server:9000
@@ -171,7 +171,7 @@ tunnels:
         assert config.tunnels[0].name == "web"
         assert config.tunnels[1].name == "api"
 
-    def test_from_yaml_with_env_vars(self, tmp_path):
+    def test_from_yaml_with_env_vars(self, tmp_path: Path) -> None:
         """Test YAML with environment variable substitution."""
         yaml_content = """
 server_addr: ${TEST_SERVER_ADDR}
@@ -197,7 +197,7 @@ tunnels:
             assert config.auth_token == "env-auth-token"
             assert config.tunnels[0].name == "env-tunnel"
 
-    def test_substitute_env_vars_string(self):
+    def test_substitute_env_vars_string(self) -> None:
         """Test environment variable substitution for strings."""
         # Test with existing env var
         with patch.dict(os.environ, {"MY_VAR": "my-value"}):
@@ -212,7 +212,7 @@ tunnels:
         result = ClientConfig._substitute_env_vars("normal string")
         assert result == "normal string"
 
-    def test_substitute_env_vars_dict(self):
+    def test_substitute_env_vars_dict(self) -> None:
         """Test environment variable substitution in dictionaries."""
         with patch.dict(os.environ, {"KEY1": "value1", "KEY2": "value2"}):
             data = {
@@ -227,14 +227,14 @@ tunnels:
                 "field3": "static",
             }
 
-    def test_substitute_env_vars_list(self):
+    def test_substitute_env_vars_list(self) -> None:
         """Test environment variable substitution in lists."""
         with patch.dict(os.environ, {"ITEM1": "first", "ITEM2": "second"}):
             data = ["${ITEM1}", "${ITEM2}", "third"]
             result = ClientConfig._substitute_env_vars(data)
             assert result == ["first", "second", "third"]
 
-    def test_substitute_env_vars_nested(self):
+    def test_substitute_env_vars_nested(self) -> None:
         """Test environment variable substitution in nested structures."""
         with patch.dict(os.environ, {"VAR1": "val1", "VAR2": "val2"}):
             data = {"level1": {"level2": ["${VAR1}", {"level3": "${VAR2}"}]}}
@@ -243,7 +243,7 @@ tunnels:
                 "level1": {"level2": ["val1", {"level3": "val2"}]}
             }
 
-    def test_substitute_env_vars_other_types(self):
+    def test_substitute_env_vars_other_types(self) -> None:
         """Test environment variable substitution with other types."""
         # Numbers, booleans, None should pass through unchanged
         assert ClientConfig._substitute_env_vars(42) == 42
@@ -251,7 +251,7 @@ tunnels:
         assert ClientConfig._substitute_env_vars(True) is True
         assert ClientConfig._substitute_env_vars(None) is None
 
-    def test_save(self, tmp_path):
+    def test_save(self, tmp_path: Path) -> None:
         """Test saving configuration to file."""
         config = ClientConfig(
             server_addr="save.server:5000",
@@ -270,7 +270,7 @@ tunnels:
         assert data["auth_token"] == "save-token"
         assert data["log_level"] == "DEBUG"
 
-    def test_save_default_path(self, tmp_path):
+    def test_save_default_path(self, tmp_path: Path) -> None:
         """Test saving to default path."""
         with patch.object(
             ClientConfig,
@@ -282,7 +282,7 @@ tunnels:
 
             assert (tmp_path / "default.json").exists()
 
-    def test_save_creates_directories(self, tmp_path):
+    def test_save_creates_directories(self, tmp_path: Path) -> None:
         """Test save creates parent directories."""
         save_path = tmp_path / "subdir1" / "subdir2" / "config.json"
         config = ClientConfig()
@@ -291,7 +291,7 @@ tunnels:
         assert save_path.exists()
         assert save_path.parent.exists()
 
-    def test_load(self, tmp_path):
+    def test_load(self, tmp_path: Path) -> None:
         """Test loading configuration from file."""
         config_data = {
             "server_addr": "load.server:6000",
@@ -313,7 +313,7 @@ tunnels:
         assert len(config.tunnels) == 1
         assert config.tunnels[0].name == "loaded"
 
-    def test_load_non_existing(self, tmp_path):
+    def test_load_non_existing(self, tmp_path: Path) -> None:
         """Test loading non-existing file returns defaults."""
         non_existing = tmp_path / "non_existing.json"
         config = ClientConfig.load(non_existing)
@@ -322,7 +322,7 @@ tunnels:
         assert config.auth_token is None
         assert config.tunnels == []
 
-    def test_load_default_path(self, tmp_path):
+    def test_load_default_path(self, tmp_path: Path) -> None:
         """Test loading from default path."""
         default_path = tmp_path / "default.json"
         config_data = {"server_addr": "default.server:7000"}
@@ -336,7 +336,7 @@ tunnels:
             config = ClientConfig.load()
             assert config.server_addr == "default.server:7000"
 
-    def test_get_default_config_file(self):
+    def test_get_default_config_file(self) -> None:
         """Test getting default config file path."""
         with patch(
             "retunnel.core.config.get_config_dir",
@@ -350,13 +350,13 @@ tunnels:
 class TestAuthConfig:
     """Test AuthConfig class."""
 
-    def test_init_no_existing_file(self, tmp_path):
+    def test_init_no_existing_file(self, tmp_path: Path) -> None:
         """Test initialization when config file doesn't exist."""
         with patch.object(AuthConfig, "CONFIG_PATH", tmp_path / "auth.conf"):
             auth = AuthConfig()
             assert auth._data == {}
 
-    def test_init_with_existing_file(self, tmp_path):
+    def test_init_with_existing_file(self, tmp_path: Path) -> None:
         """Test initialization with existing config file."""
         config_path = tmp_path / "auth.conf"
         config_data = {
@@ -370,7 +370,7 @@ class TestAuthConfig:
             auth = AuthConfig()
             assert auth._data == config_data
 
-    def test_load_corrupted_file(self, tmp_path):
+    def test_load_corrupted_file(self, tmp_path: Path) -> None:
         """Test loading corrupted config file."""
         config_path = tmp_path / "corrupted.conf"
         config_path.write_text("not valid json")
@@ -379,7 +379,7 @@ class TestAuthConfig:
             auth = AuthConfig()
             assert auth._data == {}
 
-    def test_save(self, tmp_path):
+    def test_save(self, tmp_path: Path) -> None:
         """Test saving configuration."""
         config_path = tmp_path / "save_auth.conf"
 
@@ -398,7 +398,7 @@ class TestAuthConfig:
                 stat_info = os.stat(config_path)
                 assert stat_info.st_mode & 0o777 == 0o600
 
-    def test_save_creates_directories(self, tmp_path):
+    def test_save_creates_directories(self, tmp_path: Path) -> None:
         """Test save creates parent directories."""
         config_path = tmp_path / "subdir" / "auth.conf"
 
@@ -409,7 +409,7 @@ class TestAuthConfig:
             assert config_path.exists()
             assert config_path.parent.exists()
 
-    def test_auth_token_property(self, tmp_path):
+    def test_auth_token_property(self, tmp_path: Path) -> None:
         """Test auth_token property getter/setter."""
         config_path = tmp_path / "auth_token.conf"
 
@@ -436,7 +436,7 @@ class TestAuthConfig:
                 data = json.load(f)
             assert "auth_token" not in data
 
-    def test_api_key_property(self, tmp_path):
+    def test_api_key_property(self, tmp_path: Path) -> None:
         """Test api_key property getter/setter (legacy support)."""
         config_path = tmp_path / "api_key.conf"
 
@@ -457,7 +457,7 @@ class TestAuthConfig:
             auth.api_key = None
             assert "api_key" not in auth._data
 
-    def test_clear(self, tmp_path):
+    def test_clear(self, tmp_path: Path) -> None:
         """Test clearing all configuration."""
         config_path = tmp_path / "clear.conf"
 
@@ -478,7 +478,7 @@ class TestAuthConfig:
                 data = json.load(f)
             assert data == {}
 
-    def test_multiple_operations(self, tmp_path):
+    def test_multiple_operations(self, tmp_path: Path) -> None:
         """Test multiple operations in sequence."""
         config_path = tmp_path / "multi.conf"
 

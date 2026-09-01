@@ -130,6 +130,14 @@ class TunnelCreate:
     subdomain: str | None = None
     path: str | None = None
     remote_port: int | None = None
+    # Custom hostname the account owns, e.g. "app.example.com" (issuedb #60).
+    # Mutually exclusive with `subdomain` and `path`. An OPTIONAL field rather
+    # than a new message Type, so a server that predates the feature still
+    # deserializes the frame -- it drops the unknown field and allocates a pool
+    # subdomain instead. That silent downgrade is caught on the CLIENT, which
+    # refuses any TunnelCreated whose URL host is not the hostname it asked
+    # for; do not rely on the server to report an unsupported field.
+    hostname: str | None = None
     Type: str = field(
         default=MessageType.TUNNEL_CREATE, init=False, repr=False
     )

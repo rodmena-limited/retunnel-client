@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "retunnel"
-version = "3.1.2"
+version = "3.2.0"
 description = "ReTunnel - Securely expose local servers to the internet"
 authors = [{name = "ReTunnel Team", email = "support@retunnel.com"}]
 license = "MIT"

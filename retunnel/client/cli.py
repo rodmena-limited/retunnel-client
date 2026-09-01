@@ -20,6 +20,8 @@ import yaml
 from .. import __version__
 from ..core.config import AuthConfig, ClientConfig
 from .client import TunnelConfig
+from .hostname import InvalidHostname, normalize_hostname
+from .hostname_cli import hostname as hostname_group
 from .runner import (
     EXIT_ERROR,
     EXIT_SUCCESS,
@@ -173,7 +175,10 @@ def cli(
     "-H",
     "--hostname",
     metavar="HOST",
-    help="Request specific hostname (requires DNS setup)",
+    help=(
+        "Serve on a custom hostname you own, e.g. app.example.com "
+        "(must be registered and verified first)"
+    ),
 )
 @click.option(
     "-a",
@@ -216,12 +221,21 @@ def http(
     logger = setup_logging(ctx.log_level, ctx.log_file, ctx.quiet)
 
     if hostname:
-        # Accepted-and-ignored flags are worse than refused ones (audit #47).
-        echo_stderr(
-            "Error: --hostname is not supported by this server; "
-            "omit it, or use --subdomain for a name your account owns"
-        )
-        sys.exit(EXIT_USAGE)
+        if subdomain:
+            echo_stderr(
+                "Error: --hostname and --subdomain are mutually exclusive"
+            )
+            sys.exit(EXIT_USAGE)
+        if spa:
+            echo_stderr("Error: --hostname and --spa are mutually exclusive")
+            sys.exit(EXIT_USAGE)
+        try:
+            # Checked locally so an obvious typo costs no round trip, and so
+            # the value sent on the wire is already canonical.
+            hostname = normalize_hostname(hostname)
+        except InvalidHostname as exc:
+            echo_stderr(f"Error: --hostname {hostname!r}: {exc}")
+            sys.exit(EXIT_USAGE)
     if auth and ":" not in auth:
         echo_stderr("Error: --auth must be USER:PASS")
         sys.exit(EXIT_USAGE)
@@ -231,6 +245,7 @@ def http(
         local_port=port,
         subdomain=subdomain,
         spa=spa,
+        hostname=hostname,
         auth=auth,
         inspect=True,
     )
@@ -323,20 +338,35 @@ def start(ctx: Context, config_path: Path) -> None:
 
     try:
         config = ClientConfig.from_yaml(config_path)
+        for t in config.tunnels:
+            if not t.hostname:
+                continue
+            if t.subdomain:
+                echo_stderr(
+                    f"Error: tunnel {t.name or t.local_port}: 'hostname' and "
+                    "'subdomain' are mutually exclusive"
+                )
+                sys.exit(EXIT_USAGE)
+            try:
+                t.hostname = normalize_hostname(t.hostname)
+            except InvalidHostname as exc:
+                echo_stderr(
+                    f"Error: tunnel {t.name or t.local_port}: "
+                    f"hostname {t.hostname!r}: {exc}"
+                )
+                sys.exit(EXIT_USAGE)
         configs = [
             TunnelConfig(
                 protocol=t.protocol,
                 local_port=t.local_port,
                 name=t.name,
                 subdomain=t.subdomain,
+                hostname=t.hostname,
                 auth=t.auth,
                 inspect=t.inspect,
             )
             for t in config.tunnels
         ]
-        if any(t.hostname for t in config.tunnels):
-            echo_stderr("Error: 'hostname' is not supported by this server")
-            sys.exit(EXIT_USAGE)
         if not configs:
             echo_stderr(f"Error: no tunnels defined in {config_path}")
             sys.exit(EXIT_USAGE)
@@ -487,6 +517,12 @@ def main() -> None:
     except KeyboardInterrupt:
         echo_stderr("\nInterrupted")
         sys.exit(130)
+
+
+# Registered here, BEFORE the __main__ block: placing it after would mean
+# main() had already run by the time the group was attached, so
+# `retunnel hostname ...` would not exist when invoked as a module.
+cli.add_command(hostname_group)
 
 
 if __name__ == "__main__":

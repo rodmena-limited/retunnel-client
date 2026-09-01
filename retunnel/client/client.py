@@ -18,6 +18,7 @@ import random
 import ssl
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 import websockets
 from websockets.protocol import State
@@ -70,7 +71,15 @@ TERMINAL_CODES: dict[str, int] = {
     "SUBDOMAIN_UNAVAILABLE": 69,
     "PATH_TAKEN": 69,
     "TCP_DISABLED": 69,
+    # Custom hostnames (issuedb #60). All four refusals are terminal: none of
+    # them changes by reconnecting, so retrying would spin forever printing
+    # the same message.
+    "HOSTNAME_NOT_REGISTERED": 69,
+    "HOSTNAME_NOT_VERIFIED": 69,
+    "HOSTNAME_NO_CERTIFICATE": 69,
+    "HOSTNAME_TAKEN": 69,
     "INVALID_PATH": 2,
+    "INVALID_HOSTNAME": 2,
     "UNSUPPORTED_PROTOCOL": 2,
 }
 
@@ -306,7 +315,13 @@ class ReTunnelClient:
 
         for idx, cfg in enumerate(self._configs):
             prev = self._tunnels.get(idx)
-            if cfg.spa or (prev is not None and prev.path):
+            if cfg.hostname:
+                create = TunnelCreate(
+                    protocol=cfg.protocol,
+                    hostname=cfg.hostname,
+                    remote_port=cfg.remote_port,
+                )
+            elif cfg.spa or (prev is not None and prev.path):
                 create = TunnelCreate(
                     protocol=cfg.protocol,
                     path=(
@@ -330,6 +345,8 @@ class ReTunnelClient:
                 raise self._refusal(reply)
             if not isinstance(reply, TunnelCreated):
                 raise TunnelError(f"unexpected reply: {type(reply).__name__}")
+            if cfg.hostname:
+                self._assert_hostname_honoured(cfg.hostname, reply.url)
             self._tunnels[idx] = Tunnel(
                 id=reply.subdomain,
                 url=reply.url,
@@ -341,6 +358,31 @@ class ReTunnelClient:
             )
             logger.info(
                 "Tunnel ready: %s -> localhost:%d", reply.url, cfg.local_port
+            )
+
+    @staticmethod
+    def _assert_hostname_honoured(requested: str, url: str) -> None:
+        """Refuse a tunnel the server did not actually serve on our hostname.
+
+        `TunnelCreate.hostname` is an OPTIONAL field, and the deserializer
+        drops fields it does not know (that is what keeps v1 peers working).
+        So a server older than issuedb #60 does not reject the request -- it
+        silently ignores the hostname and allocates a pool subdomain instead.
+        The user would see "Tunnel ready: https://calm-fox-12.retunnel.net"
+        after asking for https://app.example.com, and their DNS would point at
+        a name nothing was listening on.
+
+        An accepted-and-ignored flag is exactly the failure audit #47 called
+        out, so the client checks the answer rather than trusting it.
+        """
+        host = urlsplit(url).hostname or ""
+        if host.lower() != requested.lower():
+            raise TerminalError(
+                "HOSTNAME_IGNORED",
+                f"asked for https://{requested} but the server returned "
+                f"{url} -- this server does not support custom hostnames "
+                f"(needs the issuedb #60 server release)",
+                69,
             )
 
     async def _teardown(self) -> None:

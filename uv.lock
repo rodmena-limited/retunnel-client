@@ -1602,7 +1602,7 @@ wheels = [
 
 [[package]]
 name = "retunnel"
-version = "3.0.3"
+version = "3.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
@@ -1610,12 +1610,14 @@ dependencies = [
     { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "click", version = "8.2.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "msgpack" },
+    { name = "multidict" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "typing-extensions" },
     { name = "websockets" },
+    { name = "yarl" },
 ]
 
 [package.optional-dependencies]
@@ -1653,7 +1655,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiofiles", specifier = ">=24.1.0" },
-    { name = "aiohttp", specifier = ">=3.8.0" },
+    { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "aioresponses", marker = "extra == 'dev'", specifier = ">=0.7.4" },
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.8.3" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
@@ -1661,6 +1663,7 @@ requires-dist = [
     { name = "flake8", marker = "extra == 'dev'", specifier = ">=6.0.0" },
     { name = "isort", marker = "extra == 'dev'", specifier = ">=5.12.0" },
     { name = "msgpack", specifier = ">=1.0.0" },
+    { name = "multidict", specifier = ">=6.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pydantic-settings", specifier = ">=2.0.0" },
@@ -1674,7 +1677,8 @@ requires-dist = [
     { name = "types-aiofiles", marker = "extra == 'dev'" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },
     { name = "typing-extensions", specifier = ">=4.0.0" },
-    { name = "websockets", specifier = ">=11.0" },
+    { name = "websockets", specifier = ">=14.0" },
+    { name = "yarl", specifier = ">=1.9.0" },
 ]
 provides-extras = ["dev"]
 

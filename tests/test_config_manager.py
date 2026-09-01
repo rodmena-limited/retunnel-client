@@ -12,14 +12,14 @@ from retunnel.client.config_manager import ClientConfig, ConfigManager
 class TestClientConfig:
     """Test ClientConfig dataclass."""
 
-    def test_client_config_defaults(self):
+    def test_client_config_defaults(self) -> None:
         """Test ClientConfig with default values."""
         config = ClientConfig()
         assert config.auth_token is None
         assert config.server_url == "wss://retunnel.net"
         assert config.api_url == "https://retunnel.net"
 
-    def test_client_config_custom_values(self):
+    def test_client_config_custom_values(self) -> None:
         """Test ClientConfig with custom values."""
         config = ClientConfig(
             auth_token="test-token",
@@ -30,7 +30,7 @@ class TestClientConfig:
         assert config.server_url == "wss://custom.server.com"
         assert config.api_url == "https://custom.api.com"
 
-    def test_from_dict(self):
+    def test_from_dict(self) -> None:
         """Test creating ClientConfig from dictionary."""
         data = {
             "auth_token": "dict-token",
@@ -42,7 +42,7 @@ class TestClientConfig:
         assert config.server_url == "wss://from.dict.com"
         assert config.api_url == "https://from.dict.com"
 
-    def test_from_dict_partial(self):
+    def test_from_dict_partial(self) -> None:
         """Test from_dict with partial data."""
         data = {"auth_token": "partial-token"}
         config = ClientConfig.from_dict(data)
@@ -50,7 +50,7 @@ class TestClientConfig:
         assert config.server_url == "wss://retunnel.net"  # default
         assert config.api_url == "https://retunnel.net"  # default
 
-    def test_to_dict(self):
+    def test_to_dict(self) -> None:
         """Test converting ClientConfig to dictionary."""
         config = ClientConfig(
             auth_token="to-dict-token",
@@ -70,13 +70,13 @@ class TestClientConfig:
 class TestConfigManager:
     """Test ConfigManager class."""
 
-    def test_init_default_path(self):
+    def test_init_default_path(self) -> None:
         """Test ConfigManager initialization with default path."""
         manager = ConfigManager()
         assert manager.config_path == Path.home() / ".retunnel.conf"
         assert manager._config is None
 
-    def test_init_custom_path(self):
+    def test_init_custom_path(self) -> None:
         """Test ConfigManager initialization with custom path."""
         custom_path = Path("/tmp/custom.conf")
         manager = ConfigManager(config_path=custom_path)
@@ -84,7 +84,7 @@ class TestConfigManager:
         assert manager._config is None
 
     @pytest.mark.asyncio
-    async def test_load_non_existing_file(self, tmp_path):
+    async def test_load_non_existing_file(self, tmp_path: Path) -> None:
         """Test loading when config file doesn't exist."""
         config_path = tmp_path / "non_existent.conf"
         manager = ConfigManager(config_path=config_path)
@@ -98,7 +98,7 @@ class TestConfigManager:
         assert manager._config is config
 
     @pytest.mark.asyncio
-    async def test_load_existing_file(self, tmp_path):
+    async def test_load_existing_file(self, tmp_path: Path) -> None:
         """Test loading existing config file."""
         config_path = tmp_path / "existing.conf"
         config_data = {
@@ -116,7 +116,7 @@ class TestConfigManager:
         assert config.api_url == "https://existing.com"
 
     @pytest.mark.asyncio
-    async def test_load_cached_config(self, tmp_path):
+    async def test_load_cached_config(self, tmp_path: Path) -> None:
         """Test loading returns cached config if already loaded."""
         config_path = tmp_path / "cached.conf"
         manager = ConfigManager(config_path=config_path)
@@ -130,7 +130,9 @@ class TestConfigManager:
         assert manager._config is config1
 
     @pytest.mark.asyncio
-    async def test_load_corrupted_file(self, tmp_path, capsys):
+    async def test_load_corrupted_file(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """Test loading corrupted config file."""
         config_path = tmp_path / "corrupted.conf"
         config_path.write_text("not valid json")
@@ -147,7 +149,7 @@ class TestConfigManager:
         assert "Error loading config:" in captured.err
 
     @pytest.mark.asyncio
-    async def test_save_no_config(self, tmp_path):
+    async def test_save_no_config(self, tmp_path: Path) -> None:
         """Test save when no config is loaded."""
         config_path = tmp_path / "no_config.conf"
         manager = ConfigManager(config_path=config_path)
@@ -157,13 +159,17 @@ class TestConfigManager:
         assert not config_path.exists()
 
     @pytest.mark.asyncio
-    async def test_save_with_config(self, tmp_path):
+    async def test_save_with_config(self, tmp_path: Path) -> None:
         """Test saving configuration."""
         config_path = tmp_path / "save_test.conf"
         manager = ConfigManager(config_path=config_path)
 
         # Load to create config
         await manager.load()
+        # load() is typed as possibly leaving _config unset; assert it did not,
+        # so a regression there fails HERE with a clear message rather than as
+        # an AttributeError three lines later.
+        assert manager._config is not None
         manager._config.auth_token = "save-token"
 
         await manager.save()
@@ -178,7 +184,7 @@ class TestConfigManager:
             assert stat_info.st_mode & 0o777 == 0o600
 
     @pytest.mark.asyncio
-    async def test_get_auth_token(self, tmp_path):
+    async def test_get_auth_token(self, tmp_path: Path) -> None:
         """Test getting auth token."""
         config_path = tmp_path / "auth_token.conf"
         config_data = {"auth_token": "get-token"}
@@ -190,7 +196,7 @@ class TestConfigManager:
         assert token == "get-token"
 
     @pytest.mark.asyncio
-    async def test_set_auth_token(self, tmp_path):
+    async def test_set_auth_token(self, tmp_path: Path) -> None:
         """Test setting auth token."""
         config_path = tmp_path / "set_token.conf"
         manager = ConfigManager(config_path=config_path)
@@ -206,7 +212,7 @@ class TestConfigManager:
         assert saved_data["auth_token"] == "new-token"
 
     @pytest.mark.asyncio
-    async def test_clear_auth_token(self, tmp_path):
+    async def test_clear_auth_token(self, tmp_path: Path) -> None:
         """Test clearing auth token."""
         config_path = tmp_path / "clear_token.conf"
         config_data = {"auth_token": "to-be-cleared"}
@@ -224,7 +230,7 @@ class TestConfigManager:
         assert saved_data["auth_token"] is None
 
     @pytest.mark.asyncio
-    async def test_get_server_url(self, tmp_path):
+    async def test_get_server_url(self, tmp_path: Path) -> None:
         """Test getting server URL."""
         config_path = tmp_path / "server_url.conf"
         config_data = {"server_url": "wss://custom.server.com"}
@@ -236,7 +242,7 @@ class TestConfigManager:
         assert url == "wss://custom.server.com"
 
     @pytest.mark.asyncio
-    async def test_set_server_url(self, tmp_path):
+    async def test_set_server_url(self, tmp_path: Path) -> None:
         """Test setting server URL."""
         config_path = tmp_path / "set_server.conf"
         manager = ConfigManager(config_path=config_path)
@@ -252,7 +258,7 @@ class TestConfigManager:
         assert saved_data["server_url"] == "wss://new.server.com"
 
     @pytest.mark.asyncio
-    async def test_get_api_url(self, tmp_path):
+    async def test_get_api_url(self, tmp_path: Path) -> None:
         """Test getting API URL."""
         config_path = tmp_path / "api_url.conf"
         config_data = {"api_url": "https://custom.api.com"}
@@ -264,7 +270,7 @@ class TestConfigManager:
         assert url == "https://custom.api.com"
 
     @pytest.mark.asyncio
-    async def test_set_api_url(self, tmp_path):
+    async def test_set_api_url(self, tmp_path: Path) -> None:
         """Test setting API URL."""
         config_path = tmp_path / "set_api.conf"
         manager = ConfigManager(config_path=config_path)
@@ -280,7 +286,7 @@ class TestConfigManager:
         assert saved_data["api_url"] == "https://new.api.com"
 
     @pytest.mark.asyncio
-    async def test_save_creates_parent_directory(self, tmp_path):
+    async def test_save_creates_parent_directory(self, tmp_path: Path) -> None:
         """Test that save creates parent directory if it doesn't exist."""
         config_path = tmp_path / "subdir" / "config.conf"
         manager = ConfigManager(config_path=config_path)
@@ -293,7 +299,7 @@ class TestConfigManager:
         assert config_path.exists()
 
     @pytest.mark.asyncio
-    async def test_global_config_manager(self):
+    async def test_global_config_manager(self) -> None:
         """Test global config_manager instance."""
         from retunnel.client.config_manager import config_manager
 
