@@ -65,6 +65,13 @@ MAX_BACKOFF = 60.0
 RETRY_BUDGET = 6
 
 # Server error codes that retrying cannot fix -> exit code.
+# Keepalive on the control connection (issuedb #65). Together these bound how
+# long a client takes to notice a server that has stopped responding without
+# closing the socket -- a partition, a frozen process, a black-holed route.
+# interval + timeout = worst-case detection latency (40s at these values).
+KEEPALIVE_PING_INTERVAL = 20.0
+KEEPALIVE_PING_TIMEOUT = 20.0
+
 TERMINAL_CODES: dict[str, int] = {
     "UNAUTHORIZED": 69,
     "AUTH_REQUIRED": 69,
@@ -300,6 +307,23 @@ class ReTunnelClient:
             self.server_addr,
             max_size=MAX_FRAME_SIZE,
             open_timeout=HANDSHAKE_TIMEOUT,
+            # Declared explicitly rather than inherited (issuedb #65).
+            # Client-side detection of a dead or PARTITIONED server does not
+            # come from ReTunnel's own Heartbeat at all -- that is the
+            # server's mechanism for evicting dead CLIENTS. The message loop
+            # is `async for raw in self.ws` with no timeout, so what actually
+            # notices a server that has gone silent is the websockets
+            # library's keepalive ping. Measured on an isolated rig by
+            # SIGSTOPping the server (socket open, no data, no close frame):
+            # detection took 40s, reported as "keepalive ping timeout".
+            #
+            # These were previously library DEFAULTS that happened to be
+            # 20/20. A production liveness property must not be an
+            # undeclared dependency on a default a dependency bump can change
+            # silently. Values chosen to preserve the measured behaviour
+            # exactly; changing detection latency is a separate decision.
+            ping_interval=KEEPALIVE_PING_INTERVAL,
+            ping_timeout=KEEPALIVE_PING_TIMEOUT,
             **self._ssl_kwargs(),
         )
         await self.ws.send(
