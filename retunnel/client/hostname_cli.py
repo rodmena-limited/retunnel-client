@@ -111,12 +111,28 @@ def _print_dns(state: dict[str, Any]) -> None:
     click.echo("")
 
 
+_CERT_STATE_NOTE = {
+    "not_requested": "certificate not requested yet",
+    "in_progress": "certificate is being issued now",
+    "issued": "certificate issued",
+    "failed": "certificate issuance FAILED",
+}
+
+
 def _print_state(state: dict[str, Any]) -> None:
     flags = []
     flags.append("verified" if state.get("verified") else "UNVERIFIED")
     flags.append("cert" if state.get("certificate") else "NO CERT")
     mark = "ready" if state.get("routable") else "not ready"
     click.echo(f"{state.get('hostname')}  [{', '.join(flags)}]  {mark}")
+    cert_state = state.get("certificate_state")
+    if cert_state and not state.get("certificate"):
+        # issuedb #66: absence used to be the only symptom, and it read the
+        # same whether issuance had started, was running, or had given up.
+        note = _CERT_STATE_NOTE.get(str(cert_state), str(cert_state))
+        attempts = state.get("certificate_attempts")
+        suffix = f" (attempt {attempts})" if attempts else ""
+        click.echo(f"    {note}{suffix}")
     for key in ("verification_error", "certificate_error"):
         if state.get(key):
             click.echo(f"    {key}: {state[key]}")
@@ -150,6 +166,15 @@ def hostname_add(name: str, as_json: bool) -> None:
     if status >= 400:
         click.echo(f"Error: {body.get('detail', body)}", err=True)
         sys.exit(EXIT_ERROR)
+    if body.get("routable"):
+        # issuedb #66 D4. Registration is idempotent server-side, but announcing
+        # it as fresh and printing setup records told an operator to republish
+        # the DNS of a hostname already carrying production traffic -- the same
+        # churn that caused a resolver negative-cache incident on a name that
+        # was merely idle.
+        click.echo(f"{host} is already registered and live; nothing to do.")
+        _print_state(body)
+        return
     click.echo(f"Registered {host}")
     _print_dns(body)
 
@@ -198,18 +223,34 @@ def hostname_verify(name: str, as_json: bool) -> None:
     if body.get("dns_points_at_retunnel") is False:
         click.echo(f"WARNING: {body.get('dns_hint')}", err=True)
     if not body.get("certificate"):
-        # Do NOT say "a certificate is being issued". Nothing is: issuance
-        # needs root on the server and starts only when an operator runs it.
-        # The old wording described an automatic transition that does not
-        # exist, so a self-service user polled `hostname list` forever against
-        # certificate:false / certificate_error:null with no way to learn the
-        # next move was not theirs (issuedb #62, reported by pi-9b165e).
-        click.echo(
-            "\nNo TLS certificate yet, and issuance has NOT started: it is an\n"
-            "operator step, not an automatic one. Ask the ReTunnel operator to\n"
-            f"provision {host}, then `retunnel hostname list` will show 'ready'.\n"
-            "Until then the hostname cannot be used with --hostname."
-        )
+        # The wording follows the SERVER's reported state rather than an
+        # assumption about it. #62 removed a claim that issuance was under way
+        # when nothing issued certificates at all; #66 made issuance automatic,
+        # so the same sentence is now true -- but only when the server says so.
+        # Reading it off certificate_state keeps the two in step, and a server
+        # with automatic issuance disabled still tells the user to ask an
+        # operator.
+        state = str(body.get("certificate_state") or "")
+        if state == "failed":
+            click.echo(
+                f"\nTLS certificate issuance FAILED for {host}."
+                f"\n  {body.get('certificate_error') or 'no reason recorded'}"
+                "\nIt will be retried automatically; `retunnel hostname list`"
+                "\nshows the current state."
+            )
+        elif state in ("not_requested", ""):
+            click.echo(
+                "\nNo TLS certificate yet, and issuance has NOT started on"
+                "\nthis server: it is an operator step here, not an automatic"
+                f"\none. Ask the ReTunnel operator to provision {host}."
+                "\nUntil then the hostname cannot be used with --hostname."
+            )
+        else:
+            click.echo(
+                f"\nA TLS certificate is being issued for {host} now."
+                "\nRun `retunnel hostname list` until it shows 'ready';"
+                "\nif issuance fails the reason will appear there."
+            )
 
 
 @hostname.command("remove")

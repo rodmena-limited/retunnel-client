@@ -19,6 +19,7 @@ import yaml
 
 from .. import __version__
 from ..core.config import AuthConfig, ClientConfig
+from .cli_group import RelocatingGroup
 from .client import TunnelConfig
 from .hostname import InvalidHostname, normalize_hostname
 from .hostname_cli import hostname as hostname_group
@@ -100,7 +101,7 @@ class Context:
 pass_context = click.make_pass_decorator(Context, ensure=True)
 
 
-@click.group(invoke_without_command=True)
+@click.group(cls=RelocatingGroup, invoke_without_command=True)
 @click.option("--version", "-V", is_flag=True, help="Show version and exit")
 @click.option(
     "--quiet",
