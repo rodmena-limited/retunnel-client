@@ -41,19 +41,51 @@ class RelocatingGroup(click.Group):
                     flags[opt] = param
         return flags
 
-    def _subcommand_flags(
-        self, ctx: click.Context, name: str
-    ) -> dict[str, int]:
-        """The subcommand's own options, mapped to the values they consume."""
-        command = self.get_command(ctx, name)
-        if command is None:
-            return {}
+    @staticmethod
+    def _own_flags(command: click.Command) -> dict[str, int]:
         return {
             opt: _option_arity(param)
             for param in command.params
             for opt in (*param.opts, *param.secondary_opts)
             if opt.startswith("-")
         }
+
+    def _chain_flags(
+        self, ctx: click.Context, name: str, rest: list[str]
+    ) -> dict[str, int]:
+        """Options declared anywhere along the resolved subcommand chain.
+
+        `hostname list --json`: `--json` belongs to `list`, two levels down.
+        Looking only at the first subcommand (a group without --json) moved
+        the flag to the root, so `list` never received it (#65 regression in
+        3.2.1 and 3.2.2).
+        """
+        owned: dict[str, int] = {}
+        command = self.get_command(ctx, name)
+        i = 0
+        while command is not None:
+            own = self._own_flags(command)
+            owned.update(own)
+            if not isinstance(command, click.Group):
+                break
+            nxt = None
+            while i < len(rest):
+                token = rest[i]
+                if token == _TERMINATOR:
+                    return owned
+                if token.startswith("-"):
+                    flag = token.split("=", 1)[0]
+                    if "=" not in token and flag in own:
+                        i += own[flag]
+                    i += 1
+                    continue
+                nxt = token
+                i += 1
+                break
+            if nxt is None:
+                break
+            command = command.get_command(ctx, nxt)
+        return owned
 
     def _split_at_subcommand(
         self, args: list[str], flags: dict[str, click.Parameter]
@@ -80,7 +112,7 @@ class RelocatingGroup(click.Group):
         if split >= len(args):
             return args
 
-        owned = self._subcommand_flags(ctx, args[split])
+        owned = self._chain_flags(ctx, args[split], args[split + 1 :])
         leading = args[:split]
         trailing = [args[split]]
         moved: list[str] = []

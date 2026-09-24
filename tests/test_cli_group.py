@@ -139,3 +139,42 @@ def test_real_cli_accepts_log_level_after_subcommand() -> None:
     )
     assert res.exit_code == 0, res.output
     assert "No such option" not in res.output
+
+
+@click.group(cls=RelocatingGroup, invoke_without_command=True)
+@click.option("--json", "json_output", is_flag=True)
+@click.pass_context
+def nested_root(ctx: click.Context, json_output: bool) -> None:
+    ctx.obj = {"root_json": json_output}
+
+
+@nested_root.group("hostname")
+def nested_hostname() -> None:
+    pass
+
+
+@nested_hostname.command("list")
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def nested_list(ctx: click.Context, as_json: bool) -> None:
+    click.echo(f"sub_json={as_json} root={ctx.find_root().obj}")
+
+
+def test_nested_subcommand_keeps_its_own_option(runner: CliRunner) -> None:
+    """`hostname list --json`: the option belongs to `list`, two levels down.
+
+    3.2.1/3.2.2 checked only the first subcommand (`hostname`, a group with no
+    --json), moved the flag to the root, and `list` never saw it.
+    """
+    res = runner.invoke(nested_root, ["hostname", "list", "--json"])
+    assert res.exit_code == 0, res.output
+    assert "sub_json=True" in res.output
+    assert "'root_json': False" in res.output
+
+
+def test_real_cli_hostname_list_json_reaches_the_subcommand() -> None:
+    from retunnel.client.cli import cli
+
+    res = CliRunner().invoke(cli, ["hostname", "list", "--json", "--help"])
+    assert res.exit_code == 0, res.output
+    assert "Machine-readable output" in res.output

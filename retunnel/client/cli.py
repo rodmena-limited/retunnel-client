@@ -31,6 +31,7 @@ from .runner import (
     echo_stdout,
     run_tunnels,
 )
+from .token_cli import token as token_group
 
 if TYPE_CHECKING:
     # logging.StreamHandler is generic to type checkers but is NOT subscriptable
@@ -525,6 +526,7 @@ def main() -> None:
 # main() had already run by the time the group was attached, so
 # `retunnel hostname ...` would not exist when invoked as a module.
 cli.add_command(hostname_group)
+cli.add_command(token_group)
 
 
 if __name__ == "__main__":
