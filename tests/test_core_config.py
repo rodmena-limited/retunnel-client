@@ -378,15 +378,16 @@ class TestAuthConfig:
         with patch.object(AuthConfig, "CONFIG_PATH", config_path):
             auth = AuthConfig()
             assert auth._data == {}
+            assert auth.unreadable is not None
+        assert config_path.read_text() == "not valid json"
 
     def test_save(self, tmp_path: Path) -> None:
-        """Test saving configuration."""
+        """Setting the token writes the file with owner-only permissions."""
         config_path = tmp_path / "save_auth.conf"
 
         with patch.object(AuthConfig, "CONFIG_PATH", config_path):
             auth = AuthConfig()
-            auth._data = {"auth_token": "save-token"}
-            auth.save()
+            auth.auth_token = "save-token"
 
             assert config_path.exists()
             with open(config_path) as f:
@@ -404,7 +405,7 @@ class TestAuthConfig:
 
         with patch.object(AuthConfig, "CONFIG_PATH", config_path):
             auth = AuthConfig()
-            auth.save()
+            auth.auth_token = "t"
 
             assert config_path.exists()
             assert config_path.parent.exists()

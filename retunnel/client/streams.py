@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
+import hmac
 from collections.abc import Awaitable, Callable
 from typing import Union
 
@@ -137,9 +139,23 @@ def open_method(msg: StreamOpen) -> str:
 
 
 def basic_auth_ok(headers: list[tuple[str, str]], expected: str) -> bool:
-    """`expected` is "user:pass" from -a/--auth."""
-    want = "Basic " + base64.b64encode(expected.encode()).decode()
+    """`expected` is "user:pass" from -a/--auth or RETUNNEL_BASIC_AUTH.
+
+    The scheme name is case-insensitive (RFC 7617 section 2, RFC 9110 section
+    11.1) and the credentials are compared in constant time.
+    """
+    want = expected.encode("utf-8")
+    ok = False
     for k, v in headers:
-        if k.lower() == "authorization" and v.strip() == want:
-            return True
-    return False
+        if k.lower() != "authorization":
+            continue
+        scheme, _, token = v.strip().partition(" ")
+        if scheme.lower() != "basic":
+            continue
+        try:
+            got = base64.b64decode(token.strip(), validate=True)
+        except (binascii.Error, ValueError):
+            continue
+        if hmac.compare_digest(got, want):
+            ok = True
+    return ok

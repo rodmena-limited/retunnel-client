@@ -6,20 +6,52 @@ from __future__ import annotations
 
 import types
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import aiohttp
 from aiohttp import ClientSession
 from typing_extensions import Self
 
+from ..core.exceptions import TerminalError
+
 
 class APIError(Exception):
     """API request error"""
 
-    def __init__(self, status: int, message: str):
+    def __init__(
+        self, status: int, message: str, retry_after: int | None = None
+    ):
         self.status = status
         self.message = message
+        self.retry_after = retry_after
         super().__init__(f"API Error {status}: {message}")
+
+
+EXIT_TEMPFAIL = 75
+
+
+def registration_refusal(exc: BaseException) -> TerminalError | None:
+    """A temporary server refusal of new-account registration, or None."""
+    if not isinstance(exc, APIError) or exc.status not in (429, 503):
+        return None
+    wait = f"; retry in {exc.retry_after}s" if exc.retry_after else ""
+    return TerminalError(
+        "REGISTRATION_REFUSED",
+        f"new-account registration refused ({exc.status}): {exc.message}{wait}",
+        exit_code=EXIT_TEMPFAIL,
+    )
+
+
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def is_loopback_url(url: str) -> bool:
+    """True only when the URL's host IS a loopback name, never a substring."""
+    try:
+        host = urlparse(url).hostname
+    except ValueError:
+        return False
+    return host is not None and host.lower() in _LOOPBACK_HOSTS
 
 
 class ReTunnelAPIClient:
@@ -46,10 +78,9 @@ class ReTunnelAPIClient:
         timeout = aiohttp.ClientTimeout(total=2)
         # Use SSL verification setting (#27)
         # For localhost, always disable SSL verification
-        is_localhost = (
-            "localhost" in self.api_url or "127.0.0.1" in self.api_url
+        ssl_context = (
+            False if is_loopback_url(self.api_url) else self.ssl_verify
         )
-        ssl_context = False if is_localhost else self.ssl_verify
         connector = aiohttp.TCPConnector(ssl=ssl_context)
         self._session = ClientSession(timeout=timeout, connector=connector)
         return self
@@ -104,7 +135,12 @@ class ReTunnelAPIClient:
                 error_msg = data.get(
                     "detail", data.get("error", "Unknown error")
                 )
-                raise APIError(response.status, error_msg)
+                header = response.headers.get("Retry-After", "")
+                raise APIError(
+                    response.status,
+                    error_msg,
+                    int(header) if header.isdigit() else None,
+                )
 
             return data  # type: ignore[no-any-return]
 

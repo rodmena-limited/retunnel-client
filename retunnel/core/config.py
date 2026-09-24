@@ -11,6 +11,9 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from . import conf_store
+from .conf_store import ConfigUnreadable
+
 
 def get_config_dir() -> Path:
     """Get the configuration directory path."""
@@ -137,26 +140,31 @@ class AuthConfig:
 
     def __init__(self) -> None:
         self._data: dict[str, Any] = {}
+        self.unreadable: ConfigUnreadable | None = None
         self.load()
 
     def load(self) -> None:
-        """Load configuration from file."""
-        if self.CONFIG_PATH.exists():
-            try:
-                with open(self.CONFIG_PATH) as f:
-                    self._data = json.load(f)
-            except (json.JSONDecodeError, OSError):
-                self._data = {}
+        """Load configuration; an unreadable file is recorded, not erased."""
+        try:
+            self._data = conf_store.read(self.CONFIG_PATH) or {}
+            self.unreadable = None
+        except ConfigUnreadable as exc:
+            self._data = {}
+            self.unreadable = exc
 
-    def save(self) -> None:
-        """Save configuration to file."""
-        self.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    def _set(
+        self, key: str, value: str | None, *, recover: bool = False
+    ) -> None:
+        def change(d: dict[str, Any]) -> None:
+            if value:
+                d[key] = value
+            else:
+                d.pop(key, None)
 
-        with open(self.CONFIG_PATH, "w") as f:
-            json.dump(self._data, f, indent=2)
-
-        # Set secure permissions (owner read/write only)
-        os.chmod(self.CONFIG_PATH, 0o600)
+        self._data = conf_store.update(
+            self.CONFIG_PATH, change, replace_unreadable=recover
+        )
+        self.unreadable = None
 
     @property
     def auth_token(self) -> str | None:
@@ -165,12 +173,8 @@ class AuthConfig:
 
     @auth_token.setter
     def auth_token(self, value: str | None) -> None:
-        """Set authentication token."""
-        if value:
-            self._data["auth_token"] = value
-        else:
-            self._data.pop("auth_token", None)
-        self.save()
+        """Set authentication token (explicit recovery: may replace a corrupt file)."""
+        self._set("auth_token", value, recover=True)
 
     @property
     def api_key(self) -> str | None:
@@ -180,13 +184,11 @@ class AuthConfig:
     @api_key.setter
     def api_key(self, value: str | None) -> None:
         """Set API key (legacy support)."""
-        if value:
-            self._data["api_key"] = value
-        else:
-            self._data.pop("api_key", None)
-        self.save()
+        self._set("api_key", value)
 
     def clear(self) -> None:
         """Clear all configuration."""
-        self._data = {}
-        self.save()
+        self._data = conf_store.update(
+            self.CONFIG_PATH, lambda d: d.clear(), replace_unreadable=True
+        )
+        self.unreadable = None

@@ -185,7 +185,8 @@ def cli(
     "-a",
     "--auth",
     metavar="USER:PASS",
-    help="Require HTTP basic authentication",
+    envvar="RETUNNEL_BASIC_AUTH",
+    help="Require HTTP basic auth (or set RETUNNEL_BASIC_AUTH)",
 )
 @click.option(
     "--server",

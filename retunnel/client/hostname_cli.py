@@ -21,6 +21,7 @@ import click
 
 from ..core.config import AuthConfig
 from .hostname import InvalidHostname, normalize_hostname
+from .runner import config_unreadable_message
 
 EXIT_USAGE = 2
 EXIT_ERROR = 1
@@ -38,7 +39,11 @@ def _api_base() -> str:
 
 
 def _token() -> str:
-    token = AuthConfig().auth_token
+    cfg = AuthConfig()
+    if cfg.unreadable is not None:
+        click.echo(config_unreadable_message(cfg.unreadable), err=True)
+        sys.exit(EXIT_ERROR)
+    token = cfg.auth_token
     if not token:
         click.echo(
             "Error: no auth token. Run `retunnel authtoken <TOKEN>` first.",

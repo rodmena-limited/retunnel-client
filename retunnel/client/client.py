@@ -77,6 +77,7 @@ TERMINAL_CODES: dict[str, int] = {
     "AUTH_REQUIRED": 69,
     "SUBDOMAIN_UNAVAILABLE": 69,
     "PATH_TAKEN": 69,
+    "PATH_LIMIT": 69,
     "TCP_DISABLED": 69,
     # Custom hostnames (issuedb #60). All four refusals are terminal: none of
     # them changes by reconnecting, so retrying would spin forever printing
@@ -168,23 +169,27 @@ class ReTunnelClient:
             return
 
         logger.info("No auth token found, registering anonymous user...")
-        from retunnel.client.api_client import ReTunnelAPIClient
         from retunnel.client.config_manager import config_manager
 
+        from . import api_client as api
+
         api_url = await config_manager.get_api_url()
-        if "localhost" in self.server_addr or "127.0.0.1" in self.server_addr:
+        if api.is_loopback_url(self.server_addr):
             api_url = (
                 self.server_addr.replace("wss://", "https://")
                 .replace("ws://", "http://")
                 .split("/api/v1/")[0]
             )
 
-        async with ReTunnelAPIClient(
+        async with api.ReTunnelAPIClient(
             api_url, ssl_verify=self.ssl_verify
-        ) as api:
+        ) as client_api:
             try:
-                result = await api.register_user()
+                result = await client_api.register_user()
             except Exception as e:
+                refusal = api.registration_refusal(e)
+                if refusal is not None:
+                    raise refusal from e
                 raise AuthenticationError(
                     f"Failed to register anonymous user: {e}"
                 ) from e

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from retunnel.client.config_manager import ClientConfig, ConfigManager
+from retunnel.core.conf_store import ConfigUnreadable
 
 
 class TestClientConfig:
@@ -94,7 +95,7 @@ class TestConfigManager:
         assert config.auth_token is None
         assert config.server_url == "wss://retunnel.net"
         assert config.api_url == "https://retunnel.net"
-        assert config_path.exists()  # Should create file
+        assert not config_path.exists()
         assert manager._config is config
 
     @pytest.mark.asyncio
@@ -138,15 +139,11 @@ class TestConfigManager:
         config_path.write_text("not valid json")
 
         manager = ConfigManager(config_path=config_path)
-        config = await manager.load()
+        with pytest.raises(ConfigUnreadable):
+            await manager.load()
 
-        # Should create default config
-        assert config.auth_token is None
-        assert config.server_url == "wss://retunnel.net"
-
-        # Check error message was printed to stderr
-        captured = capsys.readouterr()
-        assert "Error loading config:" in captured.err
+        assert config_path.read_text() == "not valid json"
+        assert manager._config is None
 
     @pytest.mark.asyncio
     async def test_save_no_config(self, tmp_path: Path) -> None:
@@ -291,10 +288,8 @@ class TestConfigManager:
         config_path = tmp_path / "subdir" / "config.conf"
         manager = ConfigManager(config_path=config_path)
 
-        # Load to create config
-        await manager.load()
+        await manager.set_auth_token("t")
 
-        # Parent directory should be created
         assert config_path.parent.exists()
         assert config_path.exists()
 

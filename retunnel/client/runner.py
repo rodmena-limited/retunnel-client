@@ -11,6 +11,7 @@ from typing import Any
 
 import click
 
+from ..core.conf_store import ConfigUnreadable
 from ..core.exceptions import TerminalError
 from .client import ReTunnelClient, TunnelConfig
 from .config_manager import config_manager
@@ -20,6 +21,7 @@ EXIT_SUCCESS = 0
 EXIT_ERROR = 1
 EXIT_USAGE = 2
 EXIT_UNAVAILABLE = 69  # EX_UNAVAILABLE - service unavailable / refused
+EXIT_CONFIG = 78  # EX_CONFIG - ~/.retunnel.conf exists but is unreadable
 
 
 def echo_stderr(message: str) -> None:
@@ -83,6 +85,16 @@ def _print_tunnels(
         echo_stderr("-" * 40)
 
 
+def config_unreadable_message(exc: ConfigUnreadable) -> str:
+    return (
+        f"Error: cannot read {exc.path} ({exc.reason}).\n"
+        "It holds your auth token, so it has NOT been overwritten and no new "
+        "account was registered.\n"
+        "Restore it from a backup, or set the token again with:\n"
+        "    retunnel authtoken <YOUR_TOKEN>"
+    )
+
+
 async def run_tunnels(
     configs: list[TunnelConfig],
     server: str | None = None,
@@ -98,7 +110,11 @@ async def run_tunnels(
         logger = logging.getLogger("retunnel")
 
     if not token:
-        token = await config_manager.get_auth_token()
+        try:
+            token = await config_manager.get_auth_token()
+        except ConfigUnreadable as exc:
+            echo_stderr(config_unreadable_message(exc))
+            return EXIT_CONFIG
 
     client = ReTunnelClient(
         server_addr=server or "wss://retunnel.net",

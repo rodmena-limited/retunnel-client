@@ -7,14 +7,11 @@ and server configuration.
 
 from __future__ import annotations
 
-import json
-import os
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import aiofiles
+from ..core import conf_store
 
 
 @dataclass
@@ -67,46 +64,23 @@ class ConfigManager:
         self._config: ClientConfig | None = None
 
     async def load(self) -> ClientConfig:
-        """Load configuration from file
+        """Load configuration; raises conf_store.ConfigUnreadable.
 
-        Returns:
-            ClientConfig instance
+        A missing file yields defaults and is NOT created: reading never
+        writes.
         """
         if self._config is not None:
             return self._config
-
-        if not self.config_path.exists():
-            # Create default config
-            # Use logger instead of print to avoid output pollution
-            self._config = ClientConfig()
-            await self.save()
-            return self._config
-
-        try:
-            async with aiofiles.open(self.config_path) as f:
-                data = json.loads(await f.read())
-                self._config = ClientConfig.from_dict(data)
-        except (json.JSONDecodeError, OSError, ValueError) as e:
-            print(f"Error loading config: {e}", file=sys.stderr)
-            self._config = ClientConfig()
-            await self.save()
-
+        data = conf_store.read(self.config_path)
+        self._config = ClientConfig.from_dict(data or {})
         return self._config
 
     async def save(self) -> None:
-        """Save configuration to file"""
+        """Merge this configuration into the file atomically."""
         if self._config is None:
             return
-
-        # Ensure directory exists
-        self.config_path.parent.mkdir(exist_ok=True)
-
-        # Save with restricted permissions (600)
-        async with aiofiles.open(self.config_path, "w") as f:
-            await f.write(json.dumps(self._config.to_dict(), indent=2))
-
-        # Set file permissions to 600 (read/write for owner only)
-        os.chmod(self.config_path, 0o600)
+        values = self._config.to_dict()
+        conf_store.update(self.config_path, lambda d: d.update(values))
 
     async def get_auth_token(self) -> str | None:
         """Get authentication token"""
