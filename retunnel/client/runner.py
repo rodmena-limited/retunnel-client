@@ -21,13 +21,7 @@ EXIT_SUCCESS = 0
 EXIT_ERROR = 1
 EXIT_USAGE = 2
 EXIT_UNAVAILABLE = 69  # EX_UNAVAILABLE - service unavailable / refused
-EXIT_CONFIG = 78
-SPA_WARNING = (
-    "Warning: --spa tunnels are served at https://retunnel.net/<id>, one\n"
-    "browser origin shared with every other --spa tunnel: their pages can read\n"
-    "your cookies and storage. Use a subdomain or --hostname for anything with\n"
-    "a login. --spa is deprecated and will be removed in a future release."
-)  # EX_CONFIG - ~/.retunnel.conf exists but is unreadable
+EXIT_CONFIG = 78  # EX_CONFIG - ~/.retunnel.conf exists but is unreadable
 
 
 def echo_stderr(message: str) -> None:
@@ -140,8 +134,6 @@ async def run_tunnels(
     try:
         if not quiet:
             echo_stderr("Connecting to ReTunnel server...")
-            if any(getattr(c, "spa", False) for c in configs):
-                echo_stderr(SPA_WARNING)
 
         await client.connect()
         for cfg in configs:

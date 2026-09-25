@@ -171,7 +171,7 @@ def cli(
     "-s",
     "--spa",
     is_flag=True,
-    help="Single-page-app mode: serve at retunnel.net/<ulid> (no subdomain needed)",
+    help="Tunnel id mode: a random id on its own origin, https://<id>.retunnel.net",
 )
 @click.option(
     "-H",
