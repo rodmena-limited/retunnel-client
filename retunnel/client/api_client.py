@@ -142,7 +142,11 @@ class ReTunnelAPIClient:
                     int(header) if header.isdigit() else None,
                 )
 
-            return data  # type: ignore[no-any-return]
+            if not isinstance(data, dict):
+                raise APIError(
+                    response.status, "response body is not a JSON object"
+                )
+            return data
 
     async def register_user(self, email: str | None = None) -> dict[str, Any]:
         """Register a new user

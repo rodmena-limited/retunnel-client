@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from functools import wraps
-from typing import Any, Callable, TypeVar
-
 
 class ReTunnelError(Exception):
     """Base exception for all ReTunnel errors."""
@@ -57,19 +54,3 @@ class APIError(ReTunnelError):
     def __init__(self, message: str, status_code: int | None = None):
         super().__init__(message)
         self.status_code = status_code
-
-
-F = TypeVar("F", bound=Callable[..., Any])
-
-
-def handle_api_error(func: F) -> F:
-    """Decorator to handle API errors."""
-
-    @wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            raise APIError(f"API operation failed: {e!s}") from e
-
-    return wrapper  # type: ignore[return-value]

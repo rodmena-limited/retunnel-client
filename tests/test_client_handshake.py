@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any, cast
 
 import pytest
 
@@ -16,7 +17,7 @@ from .fake_server import Conn, FakeServer, hold_open
 def _cfg(**kw: object) -> TunnelConfig:
     base: dict[str, object] = {"protocol": "http", "local_port": 1}
     base.update(kw)
-    return TunnelConfig(**base)  # type: ignore[arg-type]
+    return TunnelConfig(**cast(dict[str, Any], base))
 
 
 @pytest.mark.asyncio

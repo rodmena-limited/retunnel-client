@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `retunnel.core.exceptions.handle_api_error` is removed. Nothing in the
+  package used it.
+- A REST reply whose body is JSON but not an object (for example a list) now
+  raises `APIError` instead of being returned to callers that expect a dict.
+
 ## 3.3.0 (2026-09-27)
 
 Behaviour changes that matter to anyone running `retunnel` under a supervisor
