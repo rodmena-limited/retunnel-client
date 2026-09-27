@@ -4,6 +4,10 @@
 
 - `retunnel.core.exceptions.handle_api_error` is removed. Nothing in the
   package used it.
+- A local app that restarts on the other loopback family (127.0.0.1 <-> ::1)
+  is followed without restarting `retunnel`. Before, the first family that
+  answered was the only one tried for the rest of the process, so every
+  request failed after such a restart.
 - A REST reply whose body is JSON but not an object (for example a list) now
   raises `APIError` instead of being returned to callers that expect a dict.
 

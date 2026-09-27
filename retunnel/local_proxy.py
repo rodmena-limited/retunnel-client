@@ -101,9 +101,9 @@ class LocalProxy:
 
     def hosts(self) -> tuple[str, ...]:
         """Loopback addresses to try, best-known first."""
-        if self._host is not None:
-            return (self._host,)
-        return LOCAL_HOSTS
+        if self._host is None:
+            return LOCAL_HOSTS
+        return (self._host, *(h for h in LOCAL_HOSTS if h != self._host))
 
     def url(self, target: str, scheme: str = "http", host: str = "") -> URL:
         if not target.startswith("/"):
