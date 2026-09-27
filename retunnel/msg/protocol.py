@@ -16,7 +16,6 @@ from .messages import (
     deserialize,
     serialize,
 )
-
 from .stream import (
     MAX_INBOUND_BYTES,
     MAX_MESSAGE_BYTES,
