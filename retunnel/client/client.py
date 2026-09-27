@@ -49,6 +49,14 @@ from retunnel.msg.messages import (
 )
 
 from .http_stream import handle_http_stream
+from .refusals import (
+    EXIT_TEMPFAIL,
+    RETRY_BUDGET,
+    TransientRefusal,
+    jittered,
+    next_delay,
+    refusal,
+)
 from .streams import Sender, StreamState
 from .tcp_stream import handle_tcp_stream
 from .ws_stream import handle_ws_stream
@@ -58,38 +66,12 @@ logger = logging.getLogger(__name__)
 HANDSHAKE_TIMEOUT = 20.0
 # How long to wait for the peer's WebSocket close handshake on shutdown.
 CLOSE_TIMEOUT = 2.0
-MAX_BACKOFF = 60.0
-# A refusal the server calls transient (SUBDOMAIN_TAKEN while it evicts this
-# account's stale session, TUNNEL_CREATE_FAILED while the allocator is
-# contended) is retried this many times before the client gives up.
-RETRY_BUDGET = 6
-
-# Server error codes that retrying cannot fix -> exit code.
 # Keepalive on the control connection (issuedb #65). Together these bound how
 # long a client takes to notice a server that has stopped responding without
 # closing the socket -- a partition, a frozen process, a black-holed route.
 # interval + timeout = worst-case detection latency (40s at these values).
 KEEPALIVE_PING_INTERVAL = 20.0
 KEEPALIVE_PING_TIMEOUT = 20.0
-
-TERMINAL_CODES: dict[str, int] = {
-    "UNAUTHORIZED": 69,
-    "AUTH_REQUIRED": 69,
-    "SUBDOMAIN_UNAVAILABLE": 69,
-    "PATH_TAKEN": 69,
-    "PATH_LIMIT": 69,
-    "TCP_DISABLED": 69,
-    # Custom hostnames (issuedb #60). All four refusals are terminal: none of
-    # them changes by reconnecting, so retrying would spin forever printing
-    # the same message.
-    "HOSTNAME_NOT_REGISTERED": 69,
-    "HOSTNAME_NOT_VERIFIED": 69,
-    "HOSTNAME_NO_CERTIFICATE": 69,
-    "HOSTNAME_TAKEN": 69,
-    "INVALID_PATH": 2,
-    "INVALID_HOSTNAME": 2,
-    "UNSUPPORTED_PROTOCOL": 2,
-}
 
 
 @dataclass
@@ -258,6 +240,8 @@ class ReTunnelClient:
                     logger.error("Giving up: %s", e)
                     self._failed = e
                     self._running = False
+                except TransientRefusal as e:
+                    logger.warning("Server asked to retry later: %s", e)
                 except TunnelError as e:
                     attempts += 1
                     logger.error(
@@ -268,7 +252,7 @@ class ReTunnelClient:
                         # exhausted-budget failure as SUBDOMAIN_TAKEN reported
                         # the wrong cause (issuedb #58).
                         self._failed = TerminalError(
-                            "RETRY_BUDGET_EXHAUSTED", str(e)
+                            "RETRY_BUDGET_EXHAUSTED", str(e), EXIT_TEMPFAIL
                         )
                         self._running = False
                 except Exception as e:
@@ -279,10 +263,10 @@ class ReTunnelClient:
                     self._wakeup.set()
                 if not self._running:
                     break
-                wait = delay * (0.5 + random.random())  # jitter, 0.5x..1.5x
+                wait = jittered(delay, random.random())
                 logger.info("Reconnecting in %.1fs", wait)
                 await asyncio.sleep(wait)
-                delay = min(delay * 2, MAX_BACKOFF)
+                delay = next_delay(delay)
         finally:
             self._wakeup.set()
 
@@ -299,13 +283,6 @@ class ReTunnelClient:
         if isinstance(raw, str):
             raw = raw.encode("utf-8")
         return deserialize(raw)
-
-    @staticmethod
-    def _refusal(err: Error) -> Exception:
-        exit_code = TERMINAL_CODES.get(err.code)
-        if exit_code is not None:
-            return TerminalError(err.code, err.message, exit_code)
-        return TunnelError(f"{err.message} [{err.code}]")
 
     async def _handshake(self) -> None:
         self.ws = await websockets.connect(
@@ -336,7 +313,7 @@ class ReTunnelClient:
         )
         reply = await self._recv(HANDSHAKE_TIMEOUT)
         if isinstance(reply, Error):
-            raise self._refusal(reply)
+            raise refusal(reply)
         if not isinstance(reply, HeartbeatAck):
             raise TunnelError(f"unexpected auth reply: {type(reply).__name__}")
         self.protocol_version = negotiate_version(reply.version)
@@ -371,7 +348,7 @@ class ReTunnelClient:
             await self.ws.send(serialize(create))
             reply = await self._recv(HANDSHAKE_TIMEOUT)
             if isinstance(reply, Error):
-                raise self._refusal(reply)
+                raise refusal(reply)
             if not isinstance(reply, TunnelCreated):
                 raise TunnelError(f"unexpected reply: {type(reply).__name__}")
             if cfg.hostname:

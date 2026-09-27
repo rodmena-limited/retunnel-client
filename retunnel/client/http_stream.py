@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from typing import TYPE_CHECKING
 
@@ -18,15 +20,37 @@ from .streams import (
 )
 
 if TYPE_CHECKING:
-    from retunnel.local_proxy import LocalProxy
+    from retunnel.local_proxy import LocalProxy, LocalProxyResponse
 
 logger = logging.getLogger(__name__)
 
 # Largest request body accepted from the server (matches the server's cap).
 MAX_REQUEST_BODY = 10 * 1024 * 1024
+# All request bodies buffered at once in this process (#93): 256 concurrent
+# streams x 10 MiB would otherwise let the public exhaust a small client.
+MAX_BUFFERED_BODIES = 64 * 1024 * 1024
 
 
-async def _collect_body(msg: StreamOpen, state: StreamState) -> bytes | None:
+class BodyBudget:
+    in_use = 0
+
+    def __init__(self) -> None:
+        self.held = 0
+
+    def take(self, n: int) -> None:
+        if BodyBudget.in_use + n > MAX_BUFFERED_BODIES:
+            raise ValueError("client busy: request bodies at their memory cap")
+        BodyBudget.in_use += n
+        self.held += n
+
+    def release(self) -> None:
+        BodyBudget.in_use -= self.held
+        self.held = 0
+
+
+async def _collect_body(
+    msg: StreamOpen, state: StreamState, budget: BodyBudget
+) -> bytes | None:
     """Request body: inline for v1, streamed frames ending with fin=True for
     v2. Returns None if the server closed/reset the stream before the body
     completed."""
@@ -41,6 +65,7 @@ async def _collect_body(msg: StreamOpen, state: StreamState) -> bytes | None:
                 total += len(frame.data)
                 if total > MAX_REQUEST_BODY:
                     raise ValueError("request body larger than 10 MiB")
+                budget.take(len(frame.data))
                 parts.append(frame.data)
             if frame.fin:
                 return b"".join(parts)
@@ -48,6 +73,43 @@ async def _collect_body(msg: StreamOpen, state: StreamState) -> bytes | None:
             return None
         else:  # StreamReset
             return None
+
+
+async def _open_unless_abandoned(
+    local: LocalProxy,
+    method: str,
+    msg: StreamOpen,
+    headers: list[tuple[str, str]],
+    body: bytes,
+    state: StreamState,
+    sender: Sender,
+) -> LocalProxyResponse | None:
+    """Open the local request, dropping it if the server closes the stream
+    first (#93): a hung local app must not pin a stream the server already
+    abandoned at its first-byte timeout."""
+    opening = asyncio.ensure_future(
+        local.open_http(method, msg.path, headers, body)
+    )
+    gone = asyncio.ensure_future(state.next_frame())
+    try:
+        await asyncio.wait(
+            {opening, gone}, return_when=asyncio.FIRST_COMPLETED
+        )
+    finally:
+        if not gone.done():
+            gone.cancel()
+    if gone.done() and not gone.cancelled():
+        opening.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            resp = await opening
+            await resp.close()
+        return None
+    try:
+        return opening.result()
+    except Exception as e:
+        logger.warning("local %s %s failed: %s", method, msg.path, e)
+        await sender.reset(f"{type(e).__name__}: {e}")
+        return None
 
 
 def _meta(status: int, headers: list[tuple[str, str]]) -> bytes:
@@ -85,19 +147,21 @@ async def handle_http_stream(
         await sender.close()
         return
 
+    budget = BodyBudget()
     try:
-        body = await _collect_body(msg, state)
-    except ValueError as e:
-        await sender.reset(str(e))
-        return
-    if body is None:
-        return  # server gave up on the request before the body arrived
-
-    try:
-        resp = await local.open_http(method, msg.path, headers, body)
-    except Exception as e:
-        logger.warning("local %s %s failed: %s", method, msg.path, e)
-        await sender.reset(f"{type(e).__name__}: {e}")
+        try:
+            body = await _collect_body(msg, state, budget)
+        except ValueError as e:
+            await sender.reset(str(e))
+            return
+        if body is None:
+            return  # server gave up on the request before the body arrived
+        resp = await _open_unless_abandoned(
+            local, method, msg, headers, body, state, sender
+        )
+    finally:
+        budget.release()
+    if resp is None:
         return
 
     try:

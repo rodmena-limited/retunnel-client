@@ -14,6 +14,8 @@ import aiohttp
 from multidict import CIMultiDict
 from yarl import URL
 
+from retunnel.msg.messages import MAX_STREAMS_PER_CLIENT
+
 # Automatic headers aiohttp would otherwise add when the public caller did
 # not send them; the local app must see the caller's request, not ours.
 _SKIP_AUTO = frozenset({"Accept", "Accept-Encoding", "User-Agent"})
@@ -31,6 +33,8 @@ _SKIP_AUTO = frozenset({"Accept", "Accept-Encoding", "User-Agent"})
 # Both literals are therefore tried explicitly, IPv4 first as the common case;
 # whichever answers is remembered for the rest of the session.
 LOCAL_HOSTS = ("127.0.0.1", "::1")
+LOCAL_POOL_LIMIT = MAX_STREAMS_PER_CLIENT
+LOCAL_CONNECT_TIMEOUT = 30.0
 # The name used in logs and messages.
 LOCAL_HOST = "localhost"
 
@@ -67,19 +71,33 @@ class LocalProxy:
     def __init__(self, port: int) -> None:
         self.port = port
         self._session: aiohttp.ClientSession | None = None
+        self._ws_session: aiohttp.ClientSession | None = None
         # The loopback address that last worked, so only the first request of
         # a session pays for probing both families.
         self._host: str | None = None
 
+    @staticmethod
+    def _new_session() -> aiohttp.ClientSession:
+        return aiohttp.ClientSession(
+            auto_decompress=False,
+            connector=aiohttp.TCPConnector(limit=LOCAL_POOL_LIMIT),
+            # No overall deadline: the server's idle timeout governs
+            # long-lived responses (SSE, slow origins). `connect` bounds the
+            # wait for a pool slot plus the TCP connect (#93).
+            timeout=aiohttp.ClientTimeout(
+                total=None, sock_connect=10, connect=LOCAL_CONNECT_TIMEOUT
+            ),
+        )
+
     def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(
-                auto_decompress=False,
-                # No overall deadline: the server's idle timeout governs
-                # long-lived responses (SSE, slow origins).
-                timeout=aiohttp.ClientTimeout(total=None, sock_connect=10),
-            )
+            self._session = self._new_session()
         return self._session
+
+    def _get_ws_session(self) -> aiohttp.ClientSession:
+        if self._ws_session is None or self._ws_session.closed:
+            self._ws_session = self._new_session()
+        return self._ws_session
 
     def hosts(self) -> tuple[str, ...]:
         """Loopback addresses to try, best-known first."""
@@ -129,7 +147,7 @@ class LocalProxy:
         last: Exception | None = None
         for host in self.hosts():
             try:
-                ws = await self._get_session().ws_connect(
+                ws = await self._get_ws_session().ws_connect(
                     self.url(target, "ws", host=host),
                     headers=CIMultiDict(headers),
                     protocols=subprotocols,
@@ -145,6 +163,8 @@ class LocalProxy:
         raise last if last is not None else RuntimeError("no loopback address")
 
     async def close(self) -> None:
-        if self._session is not None and not self._session.closed:
-            await self._session.close()
+        for session in (self._session, self._ws_session):
+            if session is not None and not session.closed:
+                await session.close()
         self._session = None
+        self._ws_session = None
