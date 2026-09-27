@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.3.1 (2026-09-27)
 
 - `retunnel.core.exceptions.handle_api_error` is removed. Nothing in the
   package used it.
