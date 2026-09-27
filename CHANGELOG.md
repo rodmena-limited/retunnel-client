@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.3.2 (2026-09-27)
+
+- **Back within 10 s of a server restart, not up to 60 s.** When the edge
+  answers a reconnect with 502, 503 or 504 (it is up, the tunnel server
+  behind it is restarting), the client retries at most every 10 s, even if
+  its backoff had already grown to 60 s. Every other failure (host
+  unreachable, 429, a refusal) keeps the 60 s cap. Measured on the
+  2026-09-27 reboot: tunnels on 3.3.1 came back 36-44 s after the server.
+
 ## 3.3.1 (2026-09-27)
 
 - `retunnel.core.exceptions.handle_api_error` is removed. Nothing in the

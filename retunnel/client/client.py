@@ -53,9 +53,8 @@ from .refusals import (
     EXIT_TEMPFAIL,
     RETRY_BUDGET,
     TransientRefusal,
-    jittered,
-    next_delay,
     refusal,
+    schedule,
 )
 from .streams import Sender, StreamState
 from .tcp_stream import handle_tcp_stream
@@ -229,6 +228,7 @@ class ReTunnelClient:
         attempts = 0
         try:
             while self._running:
+                last: BaseException | None = None
                 try:
                     await self._handshake()
                     delay, attempts = 1.0, 0
@@ -256,6 +256,7 @@ class ReTunnelClient:
                         )
                         self._running = False
                 except Exception as e:
+                    last = e
                     logger.error("Connection error: %s", e)
                 finally:
                     self._ready.clear()
@@ -263,10 +264,9 @@ class ReTunnelClient:
                     self._wakeup.set()
                 if not self._running:
                     break
-                wait = jittered(delay, random.random())
+                wait, delay = schedule(delay, last, random.random())
                 logger.info("Reconnecting in %.1fs", wait)
                 await asyncio.sleep(wait)
-                delay = next_delay(delay)
         finally:
             self._wakeup.set()
 

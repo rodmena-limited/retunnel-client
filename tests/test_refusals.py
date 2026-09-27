@@ -24,7 +24,9 @@ def _cfg() -> TunnelConfig:
 
 @pytest.fixture(autouse=True)
 def fast_retries(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(client_mod, "jittered", lambda delay, r: 0.01)
+    monkeypatch.setattr(
+        client_mod, "schedule", lambda delay, exc, r: (0.01, delay)
+    )
 
 
 class TestClassification:

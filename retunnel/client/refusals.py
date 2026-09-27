@@ -17,6 +17,8 @@ from retunnel.msg.messages import Error
 
 EXIT_TEMPFAIL = 75
 MAX_BACKOFF = 60.0
+FAST_BACKOFF = 10.0
+BACKEND_DOWN_STATUSES = frozenset({502, 503, 504})
 RETRY_BUDGET = 6
 
 TERMINAL_CODES: dict[str, int] = {
@@ -57,22 +59,44 @@ def refusal(err: Error) -> Exception:
     return TunnelError(f"{err.message} [{err.code}]")
 
 
-def next_delay(delay: float) -> float:
-    return min(delay * 2, MAX_BACKOFF)
+def next_delay(delay: float, cap: float = MAX_BACKOFF) -> float:
+    return min(delay * 2, cap)
 
 
-def jittered(delay: float, unit_random: float) -> float:
-    return min(MAX_BACKOFF, delay * (0.5 + unit_random))
+def jittered(
+    delay: float, unit_random: float, cap: float = MAX_BACKOFF
+) -> float:
+    return min(cap, delay * (0.5 + unit_random))
+
+
+def backend_restarting(exc: BaseException | None) -> bool:
+    response = getattr(exc, "response", None)
+    status = getattr(
+        response, "status_code", getattr(exc, "status_code", None)
+    )
+    return status in BACKEND_DOWN_STATUSES
+
+
+def schedule(
+    delay: float, exc: BaseException | None, unit_random: float
+) -> tuple[float, float]:
+    cap = FAST_BACKOFF if backend_restarting(exc) else MAX_BACKOFF
+    delay = min(delay, cap)
+    return jittered(delay, unit_random, cap), next_delay(delay, cap)
 
 
 __all__ = [
+    "BACKEND_DOWN_STATUSES",
     "EXIT_TEMPFAIL",
+    "FAST_BACKOFF",
     "MAX_BACKOFF",
     "RETRY_BUDGET",
     "TERMINAL_CODES",
     "TRANSIENT_CODES",
     "TransientRefusal",
+    "backend_restarting",
     "jittered",
     "next_delay",
     "refusal",
+    "schedule",
 ]

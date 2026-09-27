@@ -13,6 +13,7 @@ from typing import Any
 
 import websockets
 from websockets.asyncio.server import ServerConnection, serve
+from websockets.http11 import Request, Response
 
 from retunnel.msg.messages import (
     Error,
@@ -72,6 +73,7 @@ class FakeServer:
         self.all_received: list[Message] = []
         self._server: Any = None
         self.port = 0
+        self.refuse_statuses: list[int] = []
 
     def on_connection(self, *scripts: Script) -> None:
         self.scripts.extend(scripts)
@@ -86,8 +88,21 @@ class FakeServer:
         except (websockets.ConnectionClosed, asyncio.TimeoutError):
             return
 
+    def _process_request(
+        self, connection: ServerConnection, request: Request
+    ) -> Response | None:
+        if self.refuse_statuses:
+            status = self.refuse_statuses.pop(0)
+            return connection.respond(status, "edge: backend down\n")
+        return None
+
     async def __aenter__(self) -> FakeServer:
-        self._server = await serve(self._handler, "127.0.0.1", 0)
+        self._server = await serve(
+            self._handler,
+            "127.0.0.1",
+            0,
+            process_request=self._process_request,
+        )
         self.port = self._server.sockets[0].getsockname()[1]
         return self
 
