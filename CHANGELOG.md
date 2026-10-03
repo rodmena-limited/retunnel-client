@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Removed an unused fallback for websockets versions older than 14 (the
+  supported range is 14-16). No behaviour change. Tests now pin the refusal
+  message shown to users, the backoff doubling and the jitter range (found by
+  a mutation-testing trial, #102).
+
 ## 3.3.2 (2026-09-27)
 
 - **Back within 10 s of a server restart, not up to 60 s.** When the edge

@@ -51,6 +51,36 @@ class TestClassification:
     def test_certificate_being_issued_is_transient(self) -> None:
         assert "HOSTNAME_NO_CERTIFICATE" in refusals.TRANSIENT_CODES
 
+    def test_terminal_refusal_carries_the_server_message(self) -> None:
+        err = refusals.refusal(
+            Error(code="HOSTNAME_NOT_VERIFIED", message="publish TXT x")
+        )
+        assert isinstance(err, TerminalError)
+        assert "publish TXT x" in str(err)
+
+    def test_transient_refusal_carries_message_and_code(self) -> None:
+        err = refusals.refusal(
+            Error(code="POOL_EXHAUSTED", message="retry shortly")
+        )
+        assert str(err) == "retry shortly [POOL_EXHAUSTED]"
+
+    def test_unknown_refusal_carries_message_and_code(self) -> None:
+        err = refusals.refusal(Error(code="SOMETHING_NEW", message="why"))
+        assert str(err) == "why [SOMETHING_NEW]"
+
+    def test_backoff_doubles_until_the_cap(self) -> None:
+        assert refusals.next_delay(1.0) == 2.0
+        assert refusals.next_delay(4.0) == 8.0
+        assert refusals.next_delay(40.0) == refusals.MAX_BACKOFF
+
+    @pytest.mark.parametrize(
+        "r, expected", [(0.0, 5.0), (0.5, 10.0), (0.25, 7.5)]
+    )
+    def test_jitter_spans_half_to_one_and_a_half_times(
+        self, r: float, expected: float
+    ) -> None:
+        assert refusals.jittered(10.0, r) == expected
+
     @pytest.mark.parametrize("r", [0.0, 0.5, 0.999])
     def test_jitter_never_exceeds_the_cap(self, r: float) -> None:
         assert (

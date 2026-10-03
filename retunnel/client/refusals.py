@@ -71,10 +71,7 @@ def jittered(
 
 def backend_restarting(exc: BaseException | None) -> bool:
     response = getattr(exc, "response", None)
-    status = getattr(
-        response, "status_code", getattr(exc, "status_code", None)
-    )
-    return status in BACKEND_DOWN_STATUSES
+    return getattr(response, "status_code", None) in BACKEND_DOWN_STATUSES
 
 
 def schedule(
